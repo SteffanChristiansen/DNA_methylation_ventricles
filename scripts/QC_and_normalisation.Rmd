@@ -1,0 +1,521 @@
+```{r, echo = FALSE}
+title <- "QC and normalisation"
+```
+
+---
+title: `r title`
+author: "Steffan Noe Niikanoff Christiansen"
+output: 
+  html_document:
+      number_sections: TRUE
+---
+
+#### Global options and paths
+```{r libraries, echo = FALSE, message=FALSE}
+packages <- c("tidyverse", "patchwork", "kableExtra", "sesame", "noecodedup",
+              "pheatmap", "here", "sva")
+
+invisible(lapply(packages, require, character.only = TRUE)) 
+theme_set(theme_bw() + 
+            theme(plot.title = element_text(hjust = 0.5)))
+```
+
+
+```{r setup, message=FALSE, echo = FALSE}
+# paths
+root_path <- here()
+fig_path <- here("results", "images", title, "/")
+projects_path <- str_remove(root_path, "/[A-z]+$")
+anno_path <- here(projects_path, "array_annotation", "data", "epic.2.0", "zhou_annotation")
+
+# global options
+require("knitr")
+opts_knit$set(root.dir = root_path)
+opts_chunk$set(warning = TRUE,
+               message = FALSE,
+               dpi = 300,
+               dev = "jpeg",
+               fig.width = 6,
+               fig.height = 6,
+               fig.align="center", 
+               fig.path = fig_path,
+               echo = FALSE,
+               warning = FALSE)
+
+options(scipen = 100, digits = 3, bitmapType="cairo", digits.secs = 0) # fixes grid.Call warning 
+time <- lubridate::date()
+```
+Rendering of the report was started `r time` <br>
+Following packages were loaded: `r packages`. Following user guide was used for the data analysis: http://bioconductor.org/packages/release/bioc/vignettes/sesame/inst/doc/sesame.html. <br><br> 
+
+#### Loading data
+```{r loading data}
+sample_sheet <- readRDS("data/sample_sheet_2023_12_19.rds")
+selected_colors <- readRDS("data/selected_colors_2023_12_19.rds")
+```
+
+##### Sample information
+```{r}
+sample_sheet %>% 
+  select(id, age, sex) %>% 
+  distinct() %>% 
+  s_table()
+```
+
+##### Experimental setup
+###### Day 1 (2023_04_20)
+```{r}
+sample_sheet %>% 
+  filter(date_for_run == "2023_04_20") %>% 
+  select(sentrix_position, sentrix_id, sample_name, sex, age) %>% 
+  s_table
+```
+<br>
+
+###### Day 2 (2023_05_04)
+```{r}
+sample_sheet %>% 
+  filter(date_for_run == "2023_05_04") %>% 
+  select(sentrix_position, sentrix_id, sample_name, sex, age) %>% 
+  s_table
+```
+<br><br>
+
+##### Sample summaries
+```{r Sample summary, fig.width = 10, fig.height = 6, out.width = "100%"}
+sample_sheet %>% 
+  select(id, sex) %>% 
+  distinct() %>% 
+  count(sex) %>% 
+  s_table
+```
+<br>
+
+```{r}
+sample_sheet %>% 
+  select(id, age) %>% 
+  distinct() %>% 
+  summarise(min = min(age),
+            median = median(age),
+            max = max(age)) %>% 
+  s_table
+```
+<br><br>
+
+```{r}
+prep_code <- "QCDPB"
+```
+
+```{r, eval = FALSE}
+# sesameDataCache() # cache sesame data (only once)
+addr <- sesameAnno_buildAddressFile("https://github.com/zhou-lab/InfiniumAnnotationV1/raw/main/EPICv2/hg38.tsv.gz")
+beta_values <- openSesame(searchIDATprefixes("data"),
+                          prep = prep_code,
+                          manifest = addr)
+
+beta_values <- beta_values[, sample_sheet$id_pos]
+beta_values <- beta_values[rowSums(is.na(beta_values)) == 0, ]
+
+saveRDS(beta_values, "results/processed/beta_values_2024_06_10.rds")
+```
+
+```{r, eval = TRUE}
+beta_values <- readRDS("results/processed/beta_values_2024_06_10.rds")
+```
+
+The data was processed using following prepcode: `r prep_code`. The code corresponds to following choices: <br> 
+
+  * Q	(qualityMask):	Mask probes of poor design 
+  * C	(inferInfiniumIChannel): Infer channel for Infinium-I probes 
+  * D (dyeBiasNL):	Dye bias correction (non-linear)
+  * P (pOOBAH):	Detection p-value masking using oob
+  * B (noob):	Background subtraction using oob <br>
+  
+Beta-values are available from `r ncol(beta_values)` samples and `r nrow(beta_values)` probes after sample removal and probe filtering. <br><br>
+
+#### Sample identification
+```{r Sample identification, fig.width = 9, fig.height = 6, out.width = "80%"}
+SNP_probes <- beta_values[grep("rs", rownames(beta_values)), ]
+column_annotations <- sample_sheet %>%
+  select(id) %>% as.data.frame
+row.names(column_annotations) <- colnames(SNP_probes)
+
+pheatmap(SNP_probes,
+         main = "Sample ID - 65 identification SNPs",
+         show_rownames  = FALSE,
+         annotation_colors = selected_colors,
+         annotation_col = column_annotations,
+         labels_col = column_annotations$"id")
+```
+
+```{r Sample identification 2, fig.width = 6, fig.height = 4, out.width = "80%"}
+pheatmap(SNP_probes,
+         main = "Sample ID - 65 identification SNPs",
+         show_rownames  = FALSE,
+         annotation_colors = selected_colors,
+         annotation_col = column_annotations,
+         labels_col = column_annotations$"id")
+
+rm(column_annotations, SNP_probes)
+```
+There are no indications that the samples group differently than expected. 
+<br><br>
+
+#### Quality control
+http://bioconductor.org/packages/release/bioc/vignettes/sesame/inst/doc/QC.html
+
+##### Bisulfite conversion efficiency
+```{r Bisulfite conversion, fig.width = 10, fig.height = 6, out.width = "100%"}
+# https://github.com/zwdzwd/sesame/issues/103
+mft = sesameAnno_buildManifestGRanges(
+  "https://github.com/zhou-lab/InfiniumAnnotationV1/raw/main/EPICv2/hg38.tsv.gz",
+  columns = "nextBase")
+extR = names(mft)[!is.na(mft$nextBase) & mft$nextBase=="R"]
+extA = names(mft)[!is.na(mft$nextBase) & mft$nextBase=="A"]
+
+addr <- sesameAnno_buildAddressFile("https://github.com/zhou-lab/InfiniumAnnotationV1/raw/main/EPICv2/hg38.tsv.gz")
+
+sdf <- openSesame(searchIDATprefixes("data"),
+                  manifest = addr,
+                  func = NULL,
+                  prep = "",
+                  platform = "EPIC")
+
+# bisConversionControl(sdf[["207097430103_R08C01"]],extR, extA)
+# bisConversionControl(sdf[["207097430103_R01C01"]],extR, extA)
+ 
+calulate_GCT <- function(id_pos) {
+  GCT <- bisConversionControl(sdf[[id_pos]], extR, extA)
+}
+
+sample_sheet <- sample_sheet %>% 
+  mutate(GCT = map(id_pos, calulate_GCT) %>% unlist) 
+
+sample_sheet %>% 
+  ggplot(aes(x = sample_name, 
+             y = GCT, 
+             color = sentrix_id)) +
+  geom_point() +
+  theme(axis.text.x = element_text(angle = 45,
+                                   margin = margin(4, 0, 0, 0),
+                                   hjust = 0.95)) +
+  scale_y_continuous(limits = c(1, 1.07)) +
+  labs(x = "",
+       color = "sentrix_id")
+```
+
+```{r}
+rm(mft, sdf)
+```
+<br><br>
+
+```{r eval = FALSE}
+qcs <- openSesame(searchIDATprefixes("data"), 
+                  prep = "", 
+                  func = sesameQC_calcStats, 
+                  manifest = addr)
+saveRDS(qcs, "results/processed/qcs_2024_06_10.rds")
+
+qcs_after <- openSesame(searchIDATprefixes("data"), 
+                  prep = prep_code, 
+                  func = sesameQC_calcStats, 
+                  manifest = addr)
+saveRDS(qcs_after, "results/processed/qcs_after_2024_06_10.rds")
+```
+
+```{r}
+rm(addr)
+```
+
+```{r }
+qcs <- readRDS("results/processed/qcs_2024_06_10.rds")
+
+qcs_tib <- do.call(rbind, lapply(qcs, as.data.frame)) %>% 
+  rownames_to_column(var = "id_pos") %>% 
+  as_tibble()
+
+qcs_tib <- qcs_tib %>% 
+  left_join(sample_sheet, 
+            by = "id_pos")
+
+qcs_after <- readRDS("results/processed/qcs_after_2024_06_10.rds")
+# qcs_after[[1]]
+
+qcs_after_tib <- do.call(rbind, lapply(qcs_after, as.data.frame)) %>% 
+  rownames_to_column(var = "id_pos") %>% 
+  as_tibble()
+
+qcs_after_tib <- qcs_after_tib %>% 
+  left_join(sample_sheet, 
+            by = "id_pos")
+```
+
+##### Mean oob intensities
+```{r Mean oob intensities, fig.height=5, fig.width=10}
+x <- c(0, 1250)
+y <- c(0, 1250)
+
+plot_background <- function(color_choice, qc_df) {
+  qc_df %>%
+    ggplot(aes(x = mean_oob_grn, y = mean_oob_red, color = get(paste(color_choice)))) +
+    geom_point() +
+    coord_fixed(xlim = x, 
+                ylim = y) +
+    labs(y = "Red out-of-band intensity",
+         x = "Green out-of-band intensity",
+         color = color_choice)
+}
+
+plot_background("id", qcs_tib) + ggtitle("Before preproccesing") + 
+  plot_background("id", qcs_after_tib) + ggtitle("After preproccesing") + 
+  plot_layout(ncol = 2, guide = "collect")
+
+plot_background("date_for_run", qcs_tib) + ggtitle("Before preproccesing") + 
+  plot_background("date_for_run", qcs_after_tib) + ggtitle("After preproccesing") + 
+  plot_layout(ncol = 2, guide = "collect")
+
+plot_background("sentrix_id", qcs_tib) + ggtitle("Before preproccesing") + 
+  plot_background("sentrix_id", qcs_after_tib) + ggtitle("After preproccesing") + 
+  plot_layout(ncol = 2, guide = "collect")
+
+plot_background("sentrix_position", qcs_tib) + ggtitle("Before preproccesing") + 
+  plot_background("sentrix_position", qcs_after_tib) + ggtitle("After preproccesing") + 
+  plot_layout(ncol = 2, guide = "collect")
+```
+<br><br>
+
+
+##### Ratio of red-to-grn median intensities
+```{r RGratio of red-to-grn median intensities, fig.height=6, fig.width=10}
+y <- c(0.95, 1.4)
+p1 <- qcs_tib %>% 
+  ggplot(., aes(x = sentrix_position, y = RGratio, color = id)) + 
+  geom_point() +
+  theme(axis.text.x = element_text(angle = 45,
+                                   margin = margin(4, 0, 0, 0),
+                                   hjust = 0.95)) +
+  scale_y_continuous(limits = y) + 
+  labs(title = "raw")
+
+p2 <- qcs_after_tib %>% 
+  ggplot(., aes(x = sentrix_position, y = RGratio, color = id)) + 
+  geom_point() +
+  theme(axis.text.x = element_text(angle = 45,
+                                   margin = margin(4, 0, 0, 0),
+                                   hjust = 0.95)) +
+  scale_y_continuous(limits = y) + 
+  labs(title = "processed",
+       y = "")
+
+p1 + p2 + plot_layout(ncol = 2, guide = "collect")
+```
+<br><br>
+
+
+
+##### Signal intensities 
+```{r Signal intensities, fig.height=10, fig.width=10}
+y <- c(0, 6000)
+plot_bar <- function(colname, qc_df){
+  qc_df %>%
+    ggplot() +
+    geom_bar(aes(x = sample_name, 
+                 y = get(paste(colname)), 
+                 fill = sentrix_id), stat = "identity") +
+    theme(axis.text.x = element_text(angle = 45,
+                                     margin = margin(4, 0, 0, 0),
+                                     hjust = 0.95)) +
+    scale_y_continuous(limits = y) +
+    labs(x = "",
+         color = "sentrix_id")
+}
+plot_bar("mean_intensity", qcs_tib) + ylab("Intensity") + ggtitle("Before preproccesing") + 
+  plot_bar("mean_intensity", qcs_after_tib) + ylab("Intensity")  + ggtitle("After preproccesing") + plot_layout(ncol = 1, guide = "collect") + plot_annotation(title = "Mean per sample")
+```
+<br> 
+
+```{r Signal intensities (M+U), fig.height=10, fig.width=10}
+y <- c(0, 12000)
+plot_bar("mean_intensity_MU", qcs_tib) + 
+  ylab("Intensity") + ggtitle("Before preproccesing") + 
+  plot_bar("mean_intensity_MU", qcs_after_tib) + 
+  ylab("Intensity") + ggtitle("After preproccesing") + 
+  plot_layout(ncol = 1, guide = "collect") + plot_annotation(title = "Mean per sample (M + U)")  
+```
+<br><br>
+
+##### Signal detection
+```{r signal detection , fig.height=10, fig.width=10}
+y <- c(0, 1)
+plot_bar("frac_dt", qcs_tib) + ylab("Success (%)") + ggtitle("Before preproccesing") + 
+  plot_bar("frac_dt", qcs_after_tib) + ylab("Success (%)") + ggtitle("After preproccesing") + 
+  plot_layout(ncol = 1, guide = "collect") + plot_annotation(title = "% Detection Success")  
+  
+y <- c(0, 950000)
+plot_bar("num_dt_mk", qcs_tib) + ylab("N. Probes") + ggtitle("Before preproccesing") + 
+  plot_bar("num_dt_mk", qcs_after_tib) + ylab("N. Probes") + ggtitle("After preproccesing") +
+  plot_layout(ncol = 1, guide = "collect") + plot_annotation(title = "N. Probes w/ Detection Success")  
+```
+<br><br>
+
+#### Investigaton of position bias
+```{r Investigaton of position bias}
+qcs_combined <- 
+  bind_rows(qcs_tib %>% 
+              pivot_longer(cols = num_dtna:frac_na_rs, 
+                           names_to = "variable", 
+                           values_to = "measure") %>% 
+              mutate(status = "raw"), 
+            qcs_after_tib %>% 
+              pivot_longer(cols = num_dtna:frac_na_rs, 
+                           names_to = "variable", 
+                           values_to = "measure") %>% 
+              mutate(status = "processed"))
+
+plot_selected <- function(variables) {
+  qcs_combined %>% 
+    filter(variable %in% var) %>% 
+    ggplot(., aes(x = sentrix_position, y = measure, color = status, shape = sentrix_id)) +
+    geom_point() +
+    facet_wrap(~ variable) +
+    theme(axis.text.x = element_text(angle = 45,
+                                     margin = margin(4, 0, 0, 0),
+                                     hjust = 0.95))
+}
+```
+<br><br>
+
+##### Detection (fraction)
+```{r Detection, fig.width = 10, fig.height= 8}
+var <- c("frac_dt", "frac_dt_mk", "frac_dt_cg", "frac_dt_ch", "frac_dt_rs")
+plot_selected(var)
+```
+<br><br> 
+
+##### Intensities
+```{r Intensities, fig.width = 10, fig.height= 4}
+var <- c("mean_intensity", "mean_intensity_MU", "mean_ii")
+plot_selected(var)
+
+var <- c("mean_inb_grn", "mean_inb_red")
+plot_selected(var)
+
+var <- c("mean_oob_grn", "mean_oob_red")
+plot_selected(var)
+```
+<br><br>
+
+##### Color channel
+```{r Color channel, fig.width = 8, fig.height= 4}
+var <- c("InfI_switch_R2G", "InfI_switch_G2R")
+plot_selected(var)
+
+var <- c("InfI_switch_R2R", "InfI_switch_G2G")
+plot_selected(var)
+```
+<br><br>
+
+##### Dye bias
+```{r Dye bias, fig.width = 10, fig.height = 6}
+var <- c("medR", "medG", "topR", "topG")
+
+plot_selected(var)
+```
+<br><br>
+
+##### Beta values
+```{r Beta values, fig.width = 10, fig.height = 6, out.width = "100%"}
+var <- c("mean_beta", "median_beta")
+plot_selected(var)
+
+var <- c("mean_beta_ch", "median_beta_ch")
+plot_selected(var)
+
+var <- c("mean_beta_rs", "median_beta_rs")
+plot_selected(var)
+
+var <- c("frac_unmeth_cg", "frac_meth_cg", "frac_na_cg")
+plot_selected(var)
+
+var <- c("frac_unmeth_ch", "frac_meth_ch", "frac_na_ch")
+plot_selected(var)
+
+var <- c("frac_unmeth_rs", "frac_meth_rs", "frac_na_rs")
+plot_selected(var)
+```
+<br><br>
+
+```{r}
+rm(qcs, qcs_after_tib, qcs_tib, qcs_after)
+```
+
+
+#### Combat batch correction
+```{r combat correction, eval = FALSE}
+identical(colnames(beta_values), sample_sheet$id_pos)
+M_values <- BetaValueToMValue(beta_values)
+
+chr_order <- c(paste("chr", 1:22, sep=""), "chrX", "chrY", "chrM", "chr22_KI270879v1_alt")
+all_probes <- rownames(beta_values)
+
+manifest <- read_tsv(here(anno_path, "EPICv2.hg38.manifest.gencode.v41.tsv.gz")) %>% 
+  s_names %>% 
+  mutate(cpg_chrm = factor(cpg_chrm, levels = chr_order),
+         prefix = str_extract(probeid, "[a-z]+")) %>% 
+  arrange(cpg_chrm, cpg_beg)
+
+manifest_filt <- manifest %>%
+  filter(probeid %in% all_probes) %>%
+  filter(!cpg_chrm %in% c("chrX", "chrY", "chrM", "chr22_KI270879v1_alt")) %>% 
+  filter(!prefix %in% c("ctl", "nv", "rs"))
+
+identical(colnames(M_values), sample_sheet$id_pos)
+M_values <- M_values[rownames(M_values) %in% manifest_filt$probeid, ]
+
+batch_pos = sample_sheet$sentrix_position 
+batch_slide = sample_sheet$sentrix_id 
+modcombat = model.matrix(~1, data=sample_sheet)
+
+combat_M_slide = ComBat(
+  dat = M_values, 
+  batch = batch_slide, 
+  mod = modcombat, 
+  par.prior = TRUE, 
+  prior.plots = FALSE)
+
+M_values_combat = ComBat(
+  dat = combat_M_slide,
+  batch = batch_pos,
+  mod = modcombat,
+  par.prior = TRUE,
+  prior.plots = FALSE)
+
+beta_values_combat <- MValueToBetaValue(M_values_combat)
+
+saveRDS(M_values_combat, "results/processed/m_values_combat_2024_06_27.rds")
+saveRDS(beta_values_combat, "results/processed/beta_values_combat_2024_06_27.rds")
+
+rm(M_values_combat)
+rm(combat_M_slide, M_values)
+```
+`m_values_combat_2024_06_27.rds` and `beta_values_combat_2024_06_27.rds` were saved. Combat correction is conducted on M_values before conversion into beta-values.
+  
+<br><br>
+
+
+***
+```{r computetime, echo=FALSE}
+time <- lubridate::date()
+```
+Report was knitted `r time` <br>
+
+
+```{r}
+sessionInfo()
+```
+
+
+```{r rendering while keeping objects in global environment, echo = FALSE, eval=FALSE}
+rmarkdown::render("scripts/QC_and_normalisation.Rmd", clean = TRUE, output_dir = "reports/")
+```
+<br>
