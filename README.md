@@ -9,6 +9,5 @@ This repository contain code for the following manuscript: [INSERT TITLE] (INSER
   * characterisation_of_DMRs: Characterisation of differentially methylated regions including over representation analysis
   * visualisation_DMRs: Visualisation of location of differentially methylated regions in comparison to previously identified differentially accessible regions and transcribed regulatory elements
 
-
-
-`r 1+1`
+## Code
+The `s_names`, `scroll_table`, and `s_table` helper functions are available from https://github.com/SteffanChristiansen/noecodedup

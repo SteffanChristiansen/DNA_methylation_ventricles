@@ -1,0 +1,563 @@
+```{r, echo = FALSE}
+title <- "visualisation"
+```
+
+---
+title: `r title`
+author: "Steffan Noe Christiansen"
+output: 
+  html_document:
+      number_sections: TRUE
+---
+
+### Global options and paths
+```{r message=FALSE}
+packages <- c("tidyverse", "patchwork", "sesame", "noecodedup", "here", "kableExtra", "ggtranscript", "scales")
+
+invisible(lapply(packages, require, character.only = TRUE)) 
+theme_set(theme_bw() + 
+            theme(plot.title = element_text(hjust = 0.5),
+                  axis.text = element_text(size = 10),
+                  strip.text = element_text(size = 8),
+                  strip.background = element_rect(fill="white"),
+                  panel.spacing = unit(0.1, "lines"),
+                  axis.text.x = element_text(angle = 45,
+                                             margin = margin(4, 0, 0, 0),
+                                             hjust = 1)))
+```
+
+```{r setup, message=FALSE, echo = FALSE}
+# paths
+root_path <- here()
+DMR_path <- here("results", "processed", "DMRs_sesame")
+project_path <- str_remove(root_path, "/[A-z]+$")
+anno_path <- here(project_path, "array_annotation", "data", "epic.2.0", "zhou_annotation")
+gencode_path <- here(project_path, "gtex", "data", "gtex.v9")
+fig_path <- here("results", "images", title, "/")
+hocker_path <- here(project_path, "regional_annotation", "data", "hocker_science_adv_2021")
+
+# global options
+require("knitr")
+opts_knit$set(root.dir = root_path)
+opts_chunk$set(warning = TRUE,
+               message = FALSE,
+               dpi = 300,
+               dev = "jpeg",
+               fig.width = 6,
+               fig.height = 6,
+               fig.align="center", 
+               fig.path = fig_path,
+               echo = FALSE,
+               warning = FALSE)
+
+selected_theme <- theme(axis.text.y = element_text(size = 14),
+      axis.text.x = element_text(size = 14),
+      axis.title.y = element_text(size = 16),
+      legend.text = element_text(size = 12),
+      legend.title = element_text(size = 14),
+      strip.text = element_text(size = 12),
+      plot.title = element_text(size = 14))
+
+
+options(scipen = 100, digits = 3, bitmapType="cairo") # fixes grid.Call warning 
+time <- lubridate::date()
+```
+Rendering of the report was started `r time` <br> following packages were loaded: `r packages` <br><br>
+
+### Loading data
+```{r loading data}
+selected_colors <- readRDS("data/selected_colors_2023_12_19.rds")
+beta_values_tidy <- readRDS("results/processed/beta_values_combat_tidy_2024_06_27.rds") %>%
+  select(-c(id_pos, date_for_run, sex, age, sentrix_id, sentrix_position))
+beta_values_tidy_probes <- unique(beta_values_tidy$probe_ID)
+
+gencode_anno_v2 <- read_tsv(here(anno_path, "EPICv2.hg38.manifest.gencode.v41.tsv.gz")) %>%
+  s_names
+
+gencode_anno_v2 <- gencode_anno_v2 %>%
+  filter(probeid %in% beta_values_tidy_probes)
+DMR_LV_RV_nested <- readRDS(here(DMR_path, "DMR_LV_RV_nested_5_cpgs_2024_06_27.rds"))
+DMR_LV_S_nested <- readRDS(here(DMR_path, "DMR_LV_S_nested_5_cpgs_2024_06_27.rds"))
+DMR_RV_S_nested <- readRDS(here(DMR_path, "DMR_RV_S_nested_5_cpgs_2024_06_27.rds"))
+```
+
+```{r}
+gencode_v41 <- rtracklayer::import.gff3(here(gencode_path, "gencode.v41")) %>%
+  as.data.frame()
+
+selected_genes <- c("PANCR", "PITX2")
+
+gencode_v41 <- gencode_v41 %>% 
+  filter(gene_name %in% c(selected_genes))
+```
+`r length(beta_values_tidy_probes)` probes are available from `beta_values_combat_tidy_2024_06_27.rds`. The object is filtered to contain only information about probes from significant regions. <br><br>
+
+### Transcribed regulatory elements
+```{r , fig.width = 10, fig.height = 6, out.width = "100%"}
+data_dir <- here(project_path, "public_transcriptomes", "data", "deviatiiarov_2023_nat_cv_research")
+dir(data_dir)
+
+library(ggrepel) 
+source_data_fig3 <- readxl::read_xlsx(here(data_dir, "44161_2022_182_MOESM7_ESM.xlsx"), 
+                                      skip = 2,
+                                      sheet = "DE healthy right vs left") %>% 
+  s_names
+
+source_data_fig3 <- source_data_fig3 %>% 
+  mutate_at(vars(logfc:fdr), as.numeric)
+
+selected_genes <- c("PANCR", "PITX2")
+source_data_fig3 %>%
+  filter(abs(logfc) > 1 & fdr < 0.05) %>% 
+  count(logfc > 0) %>% 
+  s_table()
+```
+In accordance with fig 3e <br><br>
+
+```{r Transcribed regulatory elements, fig.width = 10, fig.height = 6, out.width = "100%"}
+# source_data_fig1_explanations
+source_data_fig1_explanations <- readxl::read_xlsx(
+  here(data_dir, "44161_2022_182_MOESM6_ESM.xlsx"),
+  skip = 0,
+  n_max = 54
+) %>%
+  s_names
+
+source_data_fig1 <- readxl::read_xlsx(
+  here(data_dir, "44161_2022_182_MOESM6_ESM.xlsx"),
+  skip = 56,
+) %>%
+  s_names %>% 
+  mutate(width = cluster_end-cluster_start)
+
+df1 <- source_data_fig3 %>% 
+  filter(genename %in% selected_genes) %>%
+  left_join(., source_data_fig1, by = c("genename", "tre_id" = "cluster_id2"))
+
+df1 %>% 
+  arrange(cluster_start) %>% 
+  filter(abs(logfc) > 1 & fdr < 0.05) %>% 
+  select(tre_id:logcpm, fdr, cluster_start, cluster_end, width, cluster_tagcount, cluster_type, consensus_regions_class) %>% 
+  s_table()
+
+labels <- source_data_fig3 %>% 
+  filter(genename %in% c("PANCR", "PITX2") & abs(logfc) > 1 & fdr < 0.05) %>%
+  left_join(source_data_fig1, by = c("genename", "tre_id" = "cluster_id2")) %>% 
+  mutate(
+    label_name = paste0(genename, "\n", 
+                        cluster_chr, ":", 
+                        format(cluster_start, big.mark = ","), "-", 
+                        format(cluster_end, big.mark = ",")))
+
+p1 <- source_data_fig3 %>% 
+  mutate(significant = ifelse(abs(logfc) > 1 & fdr < 0.05, "significant", "not significant")) %>% 
+  ggplot(aes(x = logfc, y = -log10(pvalue), color = significant)) + 
+  geom_point(alpha = 0.25) + 
+  scale_color_manual(values = c("significant" = "red", "not significant" = "grey")) +
+  theme(axis.text.x = element_text(size = 14,angle = 0),
+        axis.text.y = element_text(size = 14),
+        axis.title.x = element_text(size = 16),
+        axis.title.y = element_text(size = 16),
+        plot.title = element_text(hjust = 0.5, size = 14),
+        legend.position = "none") +
+  geom_vline(xintercept = c(-1, 1), linetype = "dashed") + 
+  geom_label_repel(data = labels,
+                   aes(x = logfc, y = -log10(pvalue), label = label_name),
+                   box.padding  = 1.5,
+                   point.padding = 0.25,
+                   nudge_x = -3,
+                   nudge_y = 10,
+                   force = 10,
+                   color = "black", size = 4) +
+  scale_x_continuous(limits = c(-6.5, 6.5)) + 
+  labs(x = expression(Log[2]*"(fold change)"),
+       y = expression(-Log[10](italic(p)*"-value")),
+       title = "Transcribed regulatory elements (Deviatiiarov et al. 2023)")
+# p1
+```
+
+```{r Transcribed regulatory elements w8 h3, fig.width = 8, fig.height = 3, out.width = "100%"}
+# p1
+```
+
+```{r Transcribed regulatory elements w8 h5, fig.width = 8, fig.height = 5, out.width = "100%"}
+p1
+```
+
+#### Adding A vs V information
+```{r Adding A vs V information, fig.width = 10, fig.height = 6, out.width = "100%"}
+source_data_fig3_a_v <- readxl::read_xlsx(here(data_dir, "44161_2022_182_MOESM7_ESM.xlsx"), 
+                                          skip = 2,
+                                          sheet = "DE healthy atrium vs ventricle") %>% 
+  s_names
+
+selected_genes <- c("PANCR", "PITX2")
+source_data_fig3_a_v %>% 
+  filter(tre_id %in% df1$tre_id) %>% 
+  s_table()
+```
+<br><br>
+
+### Previous tresholds for DMRs
+Paper | DMR Cutoff
+-------------------|----------------------------------------------------------------
+https://www.nature.com/articles/s41398-019-0550-2 | *"Here we defined a DMR as a region containing ≥ 5 correlated probes (peak probe p < 0.01 and correlation among probes ≥ 0.30), and a significant DMR was defined as a region with q < 0.05 after correcting for total number of 6858 regions."*
+https://www.mdpi.com/2073-4409/8/8/921/htm | *"DMRcate was applied to identify differentially methylated regions (DMRs), defined as a 300 nucleotides sequence with at least seven CpG sites presenting methylation changes in the same direction [32]. "*"
+https://journals.plos.org/plosone/article?id=10.1371/journal.pone.0209656 | *"Statistical significance was defined as DMRs that had a Stouffer transformed Benjamini-Hochberg (BH) adjusted p-value below 0.05."*
+https://www.nature.com/articles/s41467-019-11004-3 | *"Differentially methylated regions were identified using DMRcate (v1.14.0)61 setting a threshold of absolute change in beta value in >0.1 and of Stouffer’s value in <0.05."*
+https://www.tandfonline.com/doi/full/10.1080/15592294.2019.1588682 | *"We searched for differentially methylated regions (DMRs), or groups of at least four CpGs within proximal genomic locations using DMRCate."* **Notice that Stouffer values are up to more than 0.80. Authors explain transformation as follows:** *Stouffer is the Stouffer transformation of the group of FDRs for individual CGs at the DMR*.  
+https://www.nature.com/articles/s41467-019-11058-3   | *"We performed regional DNAm analyses using DMRcate53 to identify DMRs associated with each trait. We defined a significant DMR as a DNAm region ≥5 CpGs and evaluated statistical significance using a Stouffer FDR-adjusted P <0.05"*.
+<br>
+
+### Visualisation of selected regions
+```{r }
+chr_order <- c(paste("chr", 1:22, sep=""))
+gencode_anno_v2 <- gencode_anno_v2 %>% 
+  mutate(cpg_chrm = factor(cpg_chrm, levels = chr_order)) %>% 
+  arrange(cpg_chrm, cpg_beg) %>% 
+  mutate(order = row_number())
+
+return_cpg_order <- function(beta_values_roi) {
+  cpg_order <- beta_values_roi %>%
+    arrange(cpg_beg) %>%
+    distinct(probe_ID) %>%
+    pull()
+}
+
+plot_region_per_ind <- function(DMR) {
+  DMR_probes <- DMR %>%
+    unnest(probes) %>%
+    pull(probe_id)
+  
+  beta_values_roi <- beta_values_tidy %>% 
+    filter(probe_ID %in% DMR_probes) %>% 
+    left_join(., 
+              gencode_anno_v2,
+              by = c("probe_ID" = "probeid"))
+  
+  cpg_order <- return_cpg_order(beta_values_roi) 
+  
+  region <- paste0(unique(DMR$seg_chrm), ":",
+                  format(min(DMR$seg_start), big.mark=","), "-",
+                  format(max(DMR$seg_end), big.mark=","))
+  
+  beta_values_roi %>%
+    ggplot(., aes(x = factor(probe_ID, levels = cpg_order),
+                  y = beta_value,
+                  color = origin,
+                  group = sample_name)) +
+    geom_point(size = 0.5) +
+    geom_line() +
+    theme(plot.title = element_text(hjust = 0.5,
+                                    size = 10),
+          legend.title = element_blank(),
+          axis.text.x = element_blank()) +
+    scale_y_continuous(breaks = y_breaks) + 
+    facet_wrap(~ id, nrow = 5) +
+    scale_color_manual(values = selected_colors$origin) +
+    labs(y = expression(paste(beta, "-value")),
+         x = "CpG (arranged by position)",
+         title = paste0("Seg ID:", DMR$seg_id, 
+                        ", Gene: ", beta_values_roi$genesuniq, "\n",
+                        region))
+}
+
+plot_region_with_mean <- function(DMR) {
+    DMR_probes <- DMR %>%
+    unnest(probes) %>%
+    pull(probe_id)
+  
+  beta_values_roi <- beta_values_tidy %>% 
+    filter(probe_ID %in% DMR_probes) %>% 
+    left_join(., 
+              gencode_anno_v2,
+              by = c("probe_ID" = "probeid"))
+  
+  cpg_order <- return_cpg_order(beta_values_roi) 
+  
+  region <- paste0(unique(DMR$seg_chrm), ":",
+                  format(min(DMR$seg_start), big.mark=","), "-",
+                  format(max(DMR$seg_end), big.mark=","))
+  
+  beta_values_roi %>%
+    ggplot(., aes(x = factor(probe_ID, levels = cpg_order),
+                  y = beta_value,
+                  color = origin, 
+                  group = origin)) +
+    geom_point(size = 1.5, alpha = 0.25, position = position_dodge(width = 0.25)) +
+    stat_summary(fun = mean, geom = "line", aes(group = origin), size = 1.5) +
+    theme(plot.title = element_text(hjust = 0.5,
+                                    size = 10),
+          legend.title = element_blank(),
+          axis.text.x = element_text(angle = 45,
+                                     margin = margin(4, 0, 0, 0),
+                                     hjust = 0.95)) +
+    scale_color_manual(values = selected_colors$origin) +
+    scale_y_continuous(breaks = y_breaks) + 
+    labs(y = expression(paste(beta, "-value")),
+         x = "CpG (arranged by position)",
+         title = paste0("Seg ID:", DMR$seg_id,
+                        ", Gene: ", beta_values_roi$genesuniq, "\n\n",
+                        region))
+}
+
+plot_transcripts <- function(transcripts) {
+  exons <- gencode_v41 %>% 
+    filter(str_detect(transcript_id, paste(transcripts, collapse = "|"))) %>% 
+    filter(type == "exon")
+  
+  gene_name <- exons %>% 
+    distinct(gene_name) %>% 
+    pull()
+  
+  exons %>%
+    ggplot(aes(xstart = start,
+               xend = end,
+               y = transcript_id)) +
+    geom_range(aes(fill = transcript_type),
+               height = 0.5) +
+    geom_intron(data = to_intron(exons, "transcript_id"),
+                aes(strand = strand),
+                arrow.min.intron.length = arrow_treshold) +
+    scale_x_continuous(labels = comma) + 
+    labs(x = "",
+         y = "",
+         fill = "Transcript type",
+         title = bquote(italic(.(gene_name)))) 
+}
+```
+
+#### Genes of interest
+```{r}
+combined_DMRs <- read_csv(here("results", "tables", "DMR", "combined_DMRs.csv"))
+
+print_from_dmr <- function(gene_name) {
+  combined_DMRs %>% 
+    filter(str_detect(genesuniq, gene_name)) %>% 
+    dplyr::select(seg_id:seg_pval_adj, genesuniq, comparison) %>% 
+    mutate(seg_pval = format(seg_pval, digits = 3, scientific = 1),
+           seg_pval_adj = format(seg_pval_adj, digits = 3, scientific = 1)) %>%
+    distinct() %>% 
+    s_table()
+}
+```
+
+### PANCR region
+#### Beta values
+```{r PANCR region beta, fig.width = 8, fig.height = 4}
+### Region 1
+print_from_dmr("PANCR")
+
+PANCR_region <- DMR_LV_RV_nested %>% 
+  filter(seg_id == 98142)
+
+start_viz <- PANCR_region %>% pull(seg_start)
+end_viz <- PANCR_region %>% pull(seg_end)
+
+y_breaks = c(0, 0.35)
+
+plot_region_per_ind(PANCR_region)
+p1 <- plot_region_with_mean(PANCR_region)
+
+### Region 2
+PANCR_region <- DMR_LV_S_nested %>%
+  filter(seg_id == 98148)
+
+# y_breaks = c(0.0, 0.4)
+
+p2 <- plot_region_with_mean(PANCR_region)
+
+patch <- p1 + p2 + plot_layout(
+  ncol = 2, guides = "collect", axes = "collect", width = c(14,5)) & 
+  scale_y_continuous(limits = y_breaks) 
+# patch / p3 + plot_layout(heights = c(3,2))
+patch & scale_y_continuous(limits = c(0, 0.4)) & selected_theme
+
+```
+<br><br>
+
+```{r PANCR region beta 7 3, fig.width = 7, fig.height = 3}
+patch & scale_y_continuous(limits = c(0, 0.35)) & selected_theme
+```
+<br><br>
+
+#### Overview of region
+```{r}
+y_min = 0.1
+y_max = 0.9
+
+PANCR_DMRs <- DMR_LV_S_nested %>% 
+  filter(seg_id == 98148 | seg_id == 98142) %>% 
+  select(seg_id:seg_end)
+
+gencode_v41_PANCR_PITX2 <- gencode_v41 %>%
+  filter(gene_name %in% c("PANCR", "PITX2")) %>%
+  filter(type == "gene")
+
+p1 <- gencode_v41_PANCR_PITX2 %>% 
+  ggplot(aes(xmin = start, xmax = end, ymin = y_min, ymax = y_max, fill = gene_name)) +
+  geom_rect() +
+  annotate("segment",
+           x = c(gencode_v41_PANCR_PITX2$end - gencode_v41_PANCR_PITX2$width*0.25),
+           xend = c(gencode_v41_PANCR_PITX2$start + gencode_v41_PANCR_PITX2$width*0.25),
+           y = 0.5 , yend = 0.5,
+           arrow = arrow(type = "closed", length = unit(0.1, "inches")),
+           color = "black", size = .5) +
+  scale_y_continuous(limits = c(0,1)) +
+  scale_fill_manual(values = c("#A50F00", "#FB8072" )) +
+  theme(legend.text = element_text(face = "italic"),
+        legend.justification = "left",
+        axis.title.x = element_blank()) +
+  labs(y = "",
+       title = bquote(italic("PANCR-PITX2")),
+       fill = "Gene name") 
+
+gencode_v41_filt <- gencode_v41 %>% 
+  filter(!type == "gene")
+
+p_PANCR_PITX2 <- gencode_v41_filt %>%
+  ggplot(aes(xstart = start,
+             xend = end,
+             y = transcript_id)) +
+  geom_range(data = gencode_v41_filt %>%
+               filter(type == "transcript") %>% 
+               filter(!transcript_type %in% c("processed_transcript", "retained_intron")),
+             aes(fill = gene_name),
+             height = 0.2) +
+  geom_range(data = gencode_v41_filt %>% 
+               filter(type == "CDS"), 
+             aes(fill = gene_name),
+             height = 0.8) + 
+  scale_fill_manual(values = c("#A50F00", "#FB8072")) +
+  theme(legend.text = element_text(face = "italic"),
+        legend.justification = "left",
+        axis.title.x = element_blank()) + 
+  labs(x = "",
+       y = "",
+       fill = "Gene name")
+
+
+# Adding DMR info
+df <- combined_DMRs %>% 
+  filter(str_detect(genesuniq, "PANCR")) %>% 
+  dplyr::select(seg_id:seg_end, comparison) %>% 
+  distinct %>% 
+  rename(c(start = seg_start, end = seg_end)) %>% 
+  mutate(y_min = if_else(comparison == "LV_RV", 0.1, 
+                         if_else(comparison == "LV_S", 0.55, NA)),
+         y_max = if_else(comparison == "LV_RV", 0.45, 
+                         if_else(comparison == "LV_S", 0.9, NA)),
+         comparison = str_replace_all(comparison, c("LV_S" = "LV-S", 
+                                                    "LV_RV" = "LV-RV")))
+
+p2 <- df %>% 
+  ggplot(aes(xmin = start, xmax = end, ymin = y_min, ymax = y_max, fill = comparison)) +
+  geom_rect() +
+  scale_y_continuous(limits = c(0.1, 0.9)) +
+  scale_fill_manual(values = c("#A6761D", "#666666")) +
+  theme(legend.justification = "left",
+        axis.text.y = element_blank()) + 
+  labs(fill = "Differentially methylated regions")
+
+# Adding data from Hocker et al 2021
+s10_RA_LA <- readxl::read_xlsx(here(hocker_path, "abf1444_table_s10.xlsx"), skip = 1,
+                         sheet = 3) %>%
+  s_names
+
+hocker_df <- s10_RA_LA %>% 
+  filter(chr == "chr4" & 
+           start >= min(gencode_v41$start) &
+           end <= max(gencode_v41$end)) %>% 
+  mutate(y_max = 0.9,
+         y_min = 0.1, 
+         comparison = "Left atria - right atria")
+  
+p3 <- hocker_df %>%
+  ggplot(aes(xmin = start, xmax = end, ymin = y_min, ymax = y_max, fill = comparison)) +
+  geom_rect() +
+  scale_y_continuous(limits = c(0, 1)) +
+  scale_fill_manual(values = c("#01665E")) +
+  labs(fill = "Differentially accessible regions \n(Hocker et al. 2021)") +
+  theme(axis.text.y = element_blank())
+
+
+p_region <- 
+  p_PANCR_PITX2 +
+  # p1 +
+  p2 + 
+  p3 +
+  plot_layout(ncol = 1, axes = "collect", heights = c(6, 3, 2)) &
+  scale_x_continuous(
+    labels = comma, 
+    # breaks = c(110600000, 110620000,  110630000,110640000, 
+    #            PANCR_DMRs$seg_start, PANCR_DMRs$seg_end),
+    limits = c(min(gencode_v41_PANCR_PITX2$start)-1000,
+               max(gencode_v41_PANCR_PITX2$end)+1000)) &
+  theme(
+    axis.ticks.y = element_blank(),      
+    # axis.text.y = element_blank(),
+    panel.grid.major.y = element_blank(),  
+    panel.grid.minor.y = element_blank(), 
+    legend.justification = "left",
+    plot.margin = unit(rep(0.10, 4), "cm")
+  ) & 
+  geom_vline(xintercept = c(labels$cluster_start, labels$cluster_end),
+               color = "black", linetype = "dashed", linewidth = .5, alpha = 0.75)
+```
+
+```{r PANCR region 8 6, fig.width = 8, fig.height = 6}
+p_region
+```
+
+```{r PANCR region 8 4, fig.width = 8, fig.height = 4}
+p_region
+```
+
+```{r PANCR region 8 5, fig.width = 8, fig.height = 5}
+p_region
+```
+
+Table S10 from Hocker et al 2021 was used to investigate differentially accessibility. There were `r nrow(s10_RA_LA)` rows in comparison between RA and LA. Fig S6E corresponds to the loaded data. The PANCR PITX2 data from Hocker et al is shown below:
+```{r}
+t1 <- hocker_df %>% 
+  select(-c(y_max, y_min)) %>% 
+  arrange(start) 
+
+median_logfc <- median(t1$`logfc_ra/la`)
+
+t1 %>% 
+  s_table()
+```
+The median logfc (RA/LA) was `r median_logfc`. 
+
+```{r , fig.width = 5, fig.height = 5}
+distance_DMRs <- DMR_LV_S_nested %>% 
+  filter(seg_id == 98148) %>% pull(seg_start) - DMR_LV_S_nested %>% 
+  filter(seg_id == 98142) %>% pull(seg_end)
+```
+
+
+Distance between DMRs: `r distance_DMRs`
+<br><br>
+
+
+
+
+
+------------------------------------------------------------------------
+
+```{r computetime, echo=FALSE}
+time <- lubridate::date()
+```
+
+Report was knitted `r time` <br>
+
+```{r}
+sessionInfo()
+```
+
+```{r rendering while keeping objects in global environment, echo = FALSE, eval=FALSE}
+rmarkdown::render("scripts/visualisation_DMRs.rmd", clean = TRUE, output_dir = "reports/")
+```
+
+<br>

@@ -1,0 +1,1245 @@
+```{r, echo = FALSE}
+title <- "characterisation_of_DMRs"
+```
+
+---
+title: `r title`
+author: "Steffan Noe Niikanoff Christiansen"
+output: html_document
+---
+
+### Global options and paths
+```{r libraries, echo = FALSE, message=FALSE}
+packages <- c("tidyverse", "patchwork", "kableExtra", "noecodedup", "here", "clusterProfiler", "org.Hs.eg.db", "ggVennDiagram", "biomaRt")
+
+invisible(lapply(packages, require, character.only = TRUE)) 
+theme_set(theme_bw() + 
+            theme(plot.title = element_text(hjust = 0.5)))
+```
+
+```{r setup, message=FALSE, echo = FALSE}
+# paths
+root_path <- here()
+processed_path <- here("results", "processed")
+DMR_path <- here("results", "processed", "DMRs_sesame")
+fig_path <- here("results", "images", title, "/")
+DMR_tables <- here("results", "tables", "DMR")
+
+# global options
+require("knitr")
+opts_knit$set(root.dir = root_path)
+opts_chunk$set(warning = TRUE,
+               message = FALSE,
+               dpi = 300,
+               dev = "jpeg",
+               fig.width = 6,
+               fig.height = 6,
+               fig.align="center", 
+               fig.path = fig_path,
+               echo = FALSE,
+               warning = FALSE)
+
+options(scipen = 100, digits = 3, bitmapType = "cairo")
+
+selected_theme <- theme(axis.text.y = element_text(size = 14),
+      axis.text.x = element_text(size = 14),
+      axis.title.y = element_text(size = 16),
+      axis.title.x = element_text(size = 16),
+      legend.text = element_text(size = 12),
+      legend.title = element_text(size = 14),
+      strip.text = element_text(size = 12))
+
+# fixes grid.Call warning 
+time <- lubridate::date()
+```
+Rendering of the report was started `r time` <br> Following packages were loaded: `r packages` <br><br>
+
+```{r}
+sample_sheet <- readRDS("data/sample_sheet_2025_04_08.rds")
+selected_colors <- readRDS("data/selected_colors_2023_12_19.rds")
+```
+
+### Characterisation of DMRs 
+#### n regions
+```{r eval = FALSE}
+extract_regional_information <- function(DMR_fn) {
+  DMR <- readRDS(here(DMR_path, DMR_fn)) %>% 
+    s_names %>% 
+    as_tibble() %>% 
+    dplyr::select(seg_id:seg_end, probe_id) %>% 
+    arrange(seg_id)
+  
+  DMR <- left_join(DMR, gencode_anno_v2, by = c("probe_id" = "probeid"))
+  
+  counts <- DMR %>%
+    group_by(seg_id) %>% 
+    dplyr::select(seg_id, cpg_chrm, cpg_beg, cpg_end) %>% 
+    distinct() %>% 
+    count(name = "n_pos_in_DMR")
+  
+  DMR <- left_join(DMR, counts, by = "seg_id")
+}
+
+gencode_anno_v2 <- read_tsv("~/R/projects/array_annotation/data/epic.2.0/zhou_annotation/EPICv2.hg38.manifest.gencode.v41.tsv.gz") %>%
+  s_names %>% 
+  dplyr::select(cpg_chrm:cpg_end, probeid)
+
+combined_DMR_information <- bind_rows(
+  extract_regional_information("DMR_ori_id_combat_sentrix_pos_LV_originRV_2024_06_27.rds") %>% 
+    mutate(comparison = "LV_RV"),
+  extract_regional_information("DMR_ori_id_combat_sentrix_pos_LV_originS_2024_06_27.rds") %>% 
+    mutate(comparison = "LV_S"),
+  extract_regional_information("DMR_ori_id_combat_sentrix_pos_RV_originS_2024_06_27.rds") %>% 
+    mutate(comparison = "RV_S"))
+
+saveRDS(combined_DMR_information, here(DMR_path, "combined_DMR_information_2024_09_25.rds"))
+```
+
+```{r}
+combined_DMR_information <- readRDS(here(DMR_path, "combined_DMR_information_2024_09_25.rds"))
+
+n_DMRs_filt <- combined_DMR_information %>% 
+  filter(n_pos_in_DMR >= 5) %>% 
+  distinct(seg_id, seg_chrm, seg_start, seg_end) %>%
+  nrow()
+
+n_probes_filt <- combined_DMR_information %>% 
+  filter(n_pos_in_DMR >= 5) %>% 
+  distinct(probe_id) %>%
+  nrow()
+```
+There are `r length(unique(combined_DMR_information$seg_id))` DMRs in the `combined_DMR_information.rds` object based on `r length(unique(combined_DMR_information$probe_id))` probes. When only DMRs with more than 5 CpGs are investigated, there are `r n_DMRs_filt` DMRs containing `r n_probes_filt` probes. 
+<br>
+
+#### DMRs and probes
+```{r Data}
+fn <- list.files(DMR_path, pattern = "5_cpgs")
+
+DMR_LV_RV_nested <- readRDS(here(DMR_path, "DMR_LV_RV_nested_5_cpgs_2024_06_27.rds"))
+DMR_LV_S_nested <- readRDS(here(DMR_path, "DMR_LV_S_nested_5_cpgs_2024_06_27.rds")) 
+DMR_RV_S_nested <- readRDS(here(DMR_path, "DMR_RV_S_nested_5_cpgs_2024_06_27.rds")) 
+```
+Following files were used as input: `fn`. 
+
+##### n DMRs
+```{r }
+data.frame(
+  LV_RV = nrow(DMR_LV_RV_nested),
+  LV_S = nrow(DMR_LV_S_nested),
+  RV_S = nrow(DMR_RV_S_nested) 
+) %>% 
+  s_table()
+```
+
+```{r eval = FALSE}
+beta_values_tidy <- readRDS("results/processed/beta_values_combat_tidy_2024_06_27.rds") %>%
+  dplyr::select(-c(date_for_run, sentrix_id, sentrix_position, sex, age))
+beta_val_differences <- beta_values_tidy %>%
+  pivot_wider(id_cols = -c(id_pos, sample_name),
+              names_from = origin, values_from = beta_value) %>%
+  mutate(LV_RV = LV-RV,
+         LV_S = LV-S,
+         RV_S = RV-S)
+
+saveRDS(beta_val_differences, here(processed_path, "beta_val_differences_2024_06_27.rds"))
+```
+
+```{r eval = TRUE}
+beta_val_differences <- readRDS(here(processed_path, "beta_val_differences_2024_06_27.rds"))
+
+median_diff_per_id <- function(nested_DMR, comparison) {
+  df <- tibble()
+  
+  for (i in 1:nrow(nested_DMR)) {
+    unnested <- nested_DMR[i,] %>% 
+      unnest(cols = probes)
+    
+    temp_df <- beta_val_differences %>% 
+      filter(probe_ID %in% unnested$probe_id) %>% 
+      group_by(id) %>% 
+      reframe(median_difference = median(get(paste(comparison))))
+    
+    temp_df$seg_id = nested_DMR[i,] %>% pull(seg_id)
+    temp_df$seg_est = nested_DMR[i,] %>% pull(seg_est)
+    temp_df$seg_pval = nested_DMR[i,] %>% pull(seg_pval)
+    temp_df$comparison = comparison
+    
+    df <- bind_rows(df, temp_df)
+  }
+  return(df)
+}
+
+DMR_LV_RV_median_dif <- median_diff_per_id(DMR_LV_RV_nested, "LV_RV")
+DMR_LV_S_median_dif <- median_diff_per_id(DMR_LV_S_nested, "LV_S")
+DMR_RV_S_median_dif <- median_diff_per_id(DMR_RV_S_nested, "RV_S")
+
+saveRDS(DMR_LV_RV_median_dif, here(DMR_path, "DMR_LV_RV_median_dif_2024_06_27.rds"))
+saveRDS(DMR_LV_S_median_dif, here(DMR_path, "DMR_LV_S_median_dif_2024_06_27.rds"))
+saveRDS(DMR_RV_S_median_dif, here(DMR_path, "DMR_RV_S_median_dif_2024_06_27.rds"))
+```
+
+```{r seg_est_vs_median, fig.width = 10, fig.height = 10, out.width = "80%"}
+DMR_LV_RV_median_dif <- readRDS(here(DMR_path, "DMR_LV_RV_median_dif_2024_06_27.rds"))
+DMR_LV_S_median_dif <- readRDS(here(DMR_path, "DMR_LV_S_median_dif_2024_06_27.rds"))
+DMR_RV_S_median_dif <- readRDS(here(DMR_path, "DMR_RV_S_median_dif_2024_06_27.rds"))
+
+x_limits = c(-0.5, 0.5)
+y_limits = c(-0.5, 0.5)
+
+plot_seg_est_vs_median <- function(median_dif_df) {
+  title = median_dif_df %>% 
+    distinct(comparison) %>% 
+    pull
+  
+  median_dif_df %>% 
+    ggplot(aes(x = seg_est, y = median_difference)) +
+    geom_bin2d(bins = 100) + 
+    ggtitle(title) + 
+    scale_x_continuous(limits = x_limits) + 
+    scale_y_continuous(limits = y_limits)
+}
+
+plot_seg_est_vs_median(DMR_LV_RV_median_dif) + 
+  plot_seg_est_vs_median(DMR_LV_S_median_dif) +
+  plot_seg_est_vs_median(DMR_RV_S_median_dif) +
+  plot_layout(ncol = 1, axis_titles = "collect")
+```
+
+```{r filtration based on median values, eval = TRUE}
+median_difference_treshold = 0.00
+n_cpgs = 5
+
+filt_nested_DMR <- function(nested_DMR, median_dif_df) {
+  filtered_DMRs <- median_dif_df %>%
+    filter(abs(median_difference) >= median_difference_treshold) %>%
+    distinct(seg_id) %>%
+    pull
+
+  df <- nested_DMR %>%
+    ungroup() %>%
+    filter(seg_id %in% filtered_DMRs) %>% 
+    mutate(n_probes = map_int(probes, nrow)) %>% 
+    filter(n_probes >= n_cpgs)
+  return(df)
+}
+
+DMR_LV_RV_nested <- filt_nested_DMR(DMR_LV_RV_nested, DMR_LV_RV_median_dif)
+DMR_LV_S_nested <- filt_nested_DMR(DMR_LV_S_nested, DMR_LV_S_median_dif)
+DMR_RV_S_nested <- filt_nested_DMR(DMR_RV_S_nested, DMR_RV_S_median_dif)
+```
+The `median_difference_treshold` is `r median_difference_treshold`. <br>
+
+
+```{r }
+beta_values_tidy_probes <- readRDS("results/processed/beta_values_tidy_probes_2024_06_27.rds")
+
+gencode_anno_v2 <- read_tsv("~/R/projects/array_annotation/data/epic.2.0/zhou_annotation/EPICv2.hg38.manifest.gencode.v41.tsv.gz") %>%
+  s_names %>% 
+  filter(probeid %in% beta_values_tidy_probes)
+
+ensembl <- useMart("ensembl", dataset = "hsapiens_gene_ensembl")
+gencode_anno_v2_ensembl <- gencode_anno_v2 %>% 
+  mutate(genesuniq_splitted = str_split(genesuniq, ";")) %>% 
+  unnest(cols = genesuniq_splitted) %>% 
+  dplyr::select(probeid, genesuniq_splitted) %>% 
+  na.omit(genesuniq_splitted)
+
+genesuniq_splitted_corrected <- 
+  getBM(attributes = c('ensembl_gene_id', 'external_gene_name'),
+        filters = 'ensembl_gene_id',
+        values = gencode_anno_v2_ensembl %>% 
+          distinct(genesuniq_splitted) %>% 
+          pull,
+        mart = ensembl) %>% 
+  filter(nchar(external_gene_name) > 0)
+
+gencode_anno_v2_ensembl <- left_join(
+  gencode_anno_v2_ensembl, 
+  genesuniq_splitted_corrected,
+  by = c("genesuniq_splitted" = "ensembl_gene_id")) %>% 
+  mutate(gene_symbol = if_else(str_detect(genesuniq_splitted, "ENSG"), 
+                               external_gene_name,
+                               genesuniq_splitted)) %>% 
+  dplyr::select(-external_gene_name)
+
+n_NA_gene_symbol <- gencode_anno_v2_ensembl %>% 
+  filter(is.na(gene_symbol)) %>% 
+  nrow()
+```
+
+Among the `r length(unique(beta_values_tidy_probes))` probes in the data, `r length(unique(gencode_anno_v2_ensembl$probeid))` probes are annotated to `r length(unique(gencode_anno_v2_ensembl$genesuniq_splitted))` genes (`genesuniq_splitted`). 
+```{r}
+positions_multiple_probes <- gencode_anno_v2 %>% 
+  count(cpg_chrm, cpg_beg, cpg_end, sort = TRUE) %>% 
+  filter(n > 1)
+
+n_unique_sites <- gencode_anno_v2 %>% 
+  distinct(cpg_chrm, cpg_beg, cpg_end) %>% 
+  nrow()
+
+```
+Notice that `r nrow(positions_multiple_probes)` positions are targeted by more than one probe. Therefore, only `r n_unique_sites` **sites** are investigated. 
+
+```{r eval = FALSE}
+saveRDS(gencode_anno_v2_ensembl, "results/processed/DMRs_sesame/gencode_anno_v2_ensembl.rds")
+```
+
+```{r , fig.width = 10, fig.height = 6, out.width = "100%"}
+return_DMR_table <- function(nested_DMR){
+  nested_DMR %>% 
+    unnest(probes) %>% 
+    ungroup() %>% 
+    left_join(., gencode_anno_v2 %>% 
+                dplyr::select(-c(cpg_chrm:probe_strand)), 
+              by = c("probe_id" = "probeid")) %>% 
+    arrange(seg_id)
+}
+
+combined_DMRs <- bind_rows(
+  return_DMR_table(DMR_LV_RV_nested) %>% mutate(comparison = "LV_RV"),
+  return_DMR_table(DMR_LV_S_nested) %>% mutate(comparison = "LV_S"),
+  return_DMR_table(DMR_RV_S_nested) %>% mutate(comparison = "RV_S")) %>% 
+  mutate(seg_id = factor(seg_id),
+         genesuniq_splitted = str_split(genesuniq, ";")) %>% 
+  unnest(cols = genesuniq_splitted)
+```
+
+Among the DMRs, there are no probes with out prefix than `cg`
+```{r}
+combined_DMRs %>% 
+  mutate(prefix = str_extract(probe_id, "[a-z]+")) %>% 
+  count(prefix) %>% 
+  s_table()
+```
+
+```{r eval = FALSE}
+write_csv(combined_DMRs, here("results", "tables", "DMR", "combined_DMRs.csv"))
+```
+<br>
+
+##### Range of values
+```{r}
+combined_DMRs %>% 
+  group_by(comparison) %>% 
+  reframe(min_seg_est = min(seg_est),
+          max_seg_est = max(seg_est)) %>% 
+  s_table
+```
+
+#### Linked genes 
+```{r Characterisation of DMRs, fig.width = 10, fig.height = 6, out.width = "100%"}
+combined_DMRs %>% 
+  group_by(comparison, seg_id, genesuniq, seg_chrm) %>% 
+  reframe(min = min(seg_start),
+          max = max(seg_end)) %>%
+  dplyr::select(seg_chrm:max, everything()) %>% 
+  scroll_table()
+```
+Notice: <br> 
+  
+  * n rows do not add up to total DMR counts. The sole purpose of the table is to exclude biased enrichment due to genes that are located in proximity to each other that count multiple times even though same DMR is driving analysis.
+    
+    
+```{r Linked genes , fig.width = 10, fig.height = 6, out.width = "100%"}
+linked_DMRs <- combined_DMRs %>%
+  dplyr::select(seg_id, genesuniq_splitted) %>% 
+  distinct()
+```
+Total DMRs: `r linked_DMRs %>% distinct(seg_id) %>% nrow` <br>
+Total linked genes: `r linked_DMRs %>% distinct(genesuniq_splitted) %>% nrow` <br>
+Total DMRs with no linked genes: `r linked_DMRs %>% filter(is.na(genesuniq_splitted)) %>% distinct() %>% nrow()`
+
+When the DMRs that are not linked to any gene are excluded, following DMR counts per seg_id is obtained:
+```{r}
+linked_DMRs %>%
+  na.omit(genesuniq_splitted) %>% 
+  count(seg_id, sort = TRUE, name = "occurences") %>%
+  count(occurences, sort = TRUE) %>% 
+  s_table()
+```
+<br><br>
+
+
+#### Venn - Overlapping probes and DMRs
+Venn Diagrams are visualised using the [ggVennDiagram package](https://cran.r-project.org/web/packages/ggVennDiagram/vignettes/using-ggVennDiagram.html)
+
+```{r}
+plot_venn <- function(input_list) {
+  
+  counts <- map(input_list, length) 
+  ggVennDiagram(input_list, label = "count", 
+                set_size = 4,
+                label_alpha = 0.75,
+                label_size = 6,
+                category.names = c(paste0("      ", names(input_list)[1],
+                                          ": ", counts[1]),
+                                   paste0(names(input_list)[2],": ",
+                                          counts[2], "      "),
+                                   paste0(names(input_list)[3],": ", 
+                                          counts[3]))) + 
+    scale_fill_distiller(palette = "Reds", direction = 1) +
+    labs(fill = "Count")
+}
+```
+
+
+```{r}
+probe_list <- list(
+  `LV-RV` = DMR_LV_RV_nested %>% unnest(probes) %>% pull(probe_id),
+  `LV-S` = DMR_LV_S_nested %>% unnest(probes) %>% pull(probe_id),
+  `RV-S` = DMR_RV_S_nested %>% unnest(probes) %>% pull(probe_id))
+
+genes_from_DMRs <- function(nested_DMR) {
+  df <- nested_DMR %>% 
+    unnest(probes) %>% 
+    ungroup() %>%
+    dplyr::select(seg_id, probe_id) %>% 
+    left_join(., gencode_anno_v2_ensembl, by = c("probe_id" = "probeid")) %>%
+    drop_na(genesuniq_splitted)
+  return(df)
+}
+
+gene_list <- list(
+  `LV-RV` = genes_from_DMRs(DMR_LV_RV_nested) %>% 
+    distinct(genesuniq_splitted ) %>% pull(),
+  `LV-S` = genes_from_DMRs(DMR_LV_S_nested) %>% 
+    distinct(genesuniq_splitted ) %>% pull(),
+  `RV-S` = genes_from_DMRs(DMR_RV_S_nested) %>% 
+    distinct(genesuniq_splitted ) %>% pull())
+
+LV_RV_LV_S_shared <- intersect(gene_list$`LV-RV`, gene_list$`LV-S`)
+LV_RV_RV_S_shared <- intersect(gene_list$`LV-RV`, gene_list$`RV-S`)
+RV_S_LV_S_shared <- intersect(gene_list$`RV-S`, gene_list$`LV-S`)
+shared_genes <- c(LV_RV_LV_S_shared, LV_RV_RV_S_shared, RV_S_LV_S_shared)
+
+LV_RV_unique <- genes_from_DMRs(DMR_LV_RV_nested) %>% 
+  filter(!genesuniq_splitted %in% c(shared_genes)) %>% 
+  distinct(genesuniq_splitted) %>% 
+  pull()
+
+LV_S_unique <- genes_from_DMRs(DMR_LV_S_nested) %>% 
+  filter(!genesuniq_splitted %in% c(shared_genes)) %>% 
+  distinct(genesuniq_splitted) %>% 
+  pull()
+
+RV_S_unique <- genes_from_DMRs(DMR_RV_S_nested) %>% 
+  filter(!genesuniq_splitted %in% c(shared_genes)) %>% 
+  distinct(genesuniq_splitted) %>% 
+  pull()
+```
+
+```{r venn, fig.width = 10, fig.height = 6, out.width = "100%"}
+p1 <- plot_venn(probe_list) + ggtitle("Probes in differentially methylated regions")
+
+p2 <- plot_venn(gene_list) + ggtitle("Genes linked to differentially methylated regions")
+p1 + p2 + plot_layout(ncol = 2)
+```
+<br>
+
+```{r venn dmr 6_5, fig.width = 6, fig.height = 5, out.width = "60%"}
+DMR_list <- list(
+  `LV-RV` = unique(DMR_LV_RV_nested$seg_id),
+  `LV-S` = unique(DMR_LV_S_nested$seg_id),
+  `RV-S` = unique(DMR_RV_S_nested$seg_id))
+
+plot_venn(DMR_list) + ggtitle("Differentially methylated regions") + theme(legend.text = element_text(size=14), legend.title = element_text(size=14))
+```
+<br>
+
+#### Gene table 
+```{r}
+linked_genes <- combined_DMRs %>% 
+  mutate(genesuniq_splitted = str_split(genesuniq, ";")) %>% 
+  unnest(cols = genesuniq_splitted) %>% 
+  dplyr::select(comparison, genesuniq_splitted) %>% 
+  distinct() %>% 
+  na.omit() 
+
+t1 <- tibble(
+  comparison = c("LV-RV vs LV-S", "LV-RV vs RV-S", "RV-S vs LV-S", 
+                 "LV-RV (unique)", "LV-S (unique)", "RV-S (unique)"),
+  genes = list(LV_RV_LV_S_shared, LV_RV_RV_S_shared, RV_S_LV_S_shared,
+               LV_RV_unique, LV_S_unique, RV_S_unique))
+
+t1 <- t1 %>% 
+  mutate(count = map_int(genes, length),
+         genes = map(genes, sort))
+
+
+t1$genes <- sapply(t1$genes, function(x) paste0("*", paste(x, collapse = "*, *"), "*"))
+
+colnames(t1) <- c("Comparison", "Genes linked to differentially methylated regions", "Count")
+
+t1 %>% 
+  kable() %>%  
+  kableExtra::kable_styling(
+    bootstrap_options = c("condensed", "striped"), 
+    full_width = FALSE, 
+    font_size = 14) %>% 
+  column_spec(1, width = "3cm") %>%
+  column_spec(3, width = "1 cm")
+```
+
+```{r}
+rm(gencode_anno_v2)
+```
+<br>
+
+The `gencode_anno_v2_ensembl` object contains information of `r length(unique(gencode_anno_v2_ensembl$probeid))` probes and `r length(unique(gencode_anno_v2_ensembl$genesuniq_splitted))` genes. The `gencode_anno_v2_ensembl` object is filtered to include only information of the probes that are part of a DMR with 5 >= CpG sites. 
+
+```{r}
+gencode_anno_v2_ensembl <- gencode_anno_v2_ensembl %>% 
+    right_join(., combined_DMR_information %>% 
+                 filter(n_pos_in_DMR >= n_cpgs) %>%
+      distinct(probe_id), 
+      by = c("probeid" = "probe_id"))
+```
+After the filtration, the `gencode_anno_v2_ensembl` object contains information of `r length(unique(gencode_anno_v2_ensembl$probeid))` probes and `r length(unique(gencode_anno_v2_ensembl$genesuniq_splitted))` genes.
+<br>
+
+#### Interpretation of `seg_est` values
+```{r Interpretation of `seg_est` values, fig.width = 10, fig.height = 6, out.width = "100%"}
+selected_seg_id <- 98142
+PANCR_probes <- DMR_LV_S_nested %>% 
+  filter(seg_id == selected_seg_id) %>% 
+  unnest(probes) %>% 
+  pull(probe_id)
+
+combined_DMRs %>% 
+  filter(seg_id == selected_seg_id) %>% 
+  dplyr::select(seg_id:seg_est, comparison) %>% 
+  distinct %>% 
+  mutate(seg_est = format(seg_est, digits = 3, scientific = 1)) %>% 
+  s_table()
+
+beta_val_differences %>% 
+  filter(probe_ID %in% PANCR_probes) %>% 
+  mutate(RV_LV = RV-LV,
+         S_LV = S-LV) %>% 
+  reframe(RV_LV_difference = mean(RV_LV),
+          RV_S_difference = mean(S_LV)) %>% 
+  mutate(RV_LV_difference = format(RV_LV_difference, digits = 3, scientific = 1),
+         RV_S_difference = format(RV_S_difference, digits = 3, scientific = 1)) %>% 
+  s_table()
+```
+The reported `seg_est` values are identical with the mean difference between the two contrasts among all individuals and probes (see example for seg_id: `r selected_seg_id` above). 
+
+#### Number of CpGs
+```{r Width and number of CpGs, fig.width = 10, fig.height = 6, out.width = "100%"}
+t1 <- combined_DMRs %>% 
+  distinct(seg_id, n_probes) %>% 
+  reframe(measure = "n_pos_in_DMR",
+          min = min(n_probes), 
+          median = median(n_probes),
+          max = max(n_probes)) 
+t1 %>% 
+  s_table()
+```
+<br>
+
+#### Width of regions
+```{r}
+return_width_summary <- function(DMRs) {
+  DMRs %>% 
+    distinct(seg_id, seg_start, seg_end) %>% 
+    mutate(width = seg_end-seg_start) %>% 
+    reframe(measure = "width_DMRs",
+            min = min(width),
+            quantile(width, 0.25),
+            median = median(width),
+            quantile(width, 0.75),
+            max = max(width)) 
+}
+
+t3 <- combined_DMRs %>% 
+  return_width_summary %>% 
+  mutate(group = "sig_DMRs")
+
+t4 <- combined_DMR_information %>%
+  filter(n_pos_in_DMR >= 5) %>% 
+  return_width_summary %>% 
+  mutate(group = "all_DMRs")
+
+full_join(t3, t4) %>% 
+  s_table()
+
+```
+
+<br>
+
+#### Distance to TSS
+```{r Distance to TSS, fig.width = 5, fig.height = 4, out.width = "80%"}
+dist_to_tss_df <- combined_DMRs %>% 
+  separate_rows(c(disttotss, genenames, transcripttypes, transcriptids), sep = ";") %>% 
+  dplyr::select(c(disttotss, genenames, transcripttypes, transcriptids), everything()) %>% 
+  mutate(disttotss = as.numeric(disttotss)) 
+
+dist_to_tss_df <- dist_to_tss_df %>% 
+  na.omit(disttotss) %>% 
+  mutate(direction = if_else(disttotss > 0, "5'", 
+                            if_else(disttotss < 0, "3'", "0")),
+         direction = factor(direction, levels = c("5'", "3'")), 
+         disttotss_abs = abs(disttotss)) 
+
+# dist_to_tss_df <- dist_to_tss_df %>%
+#   distinct(disttotss, seg_id, direction, disttotss_abs, comparison) 
+
+dist_to_tss_df %>% 
+  group_by(comparison, direction) %>% 
+  reframe(median_distance = median(disttotss_abs),
+          count = n()) %>% 
+  s_table()
+
+dist_to_tss_df %>%
+  reframe(median(disttotss_abs)) %>%
+  s_table()
+
+dist_to_tss_df <- dist_to_tss_df %>% 
+  mutate(comparison = str_replace_all(comparison, c("LV_S" = "LV-S", 
+                                                    "LV_RV" = "LV-RV",
+                                                    "RV_S" = "RV-S")),
+         comparison = factor(comparison, 
+                             levels = rev(c("LV-RV","LV-S","RV-S"))))
+
+
+dist_to_tss_df %>% 
+  ggplot(aes(x = disttotss_abs, y = comparison, color = factor(direction))) +
+  geom_boxplot() +
+  scale_x_continuous(trans = "log10") + 
+  scale_color_manual(values = c("#FF7F00", "#01665E")) + 
+  labs(x = "Log10(distance)",
+       color = "Direction",
+       y = "Comparison", 
+       title = "Location compared to transcription start site")
+
+dist_to_tss_df %>% 
+  ggplot(aes(x = comparison, y = disttotss_abs, color = factor(direction))) +
+  geom_boxplot() +
+  scale_y_continuous(trans = "log10") + 
+  scale_color_manual(values = c("#FF7F00", "#01665E")) + 
+  labs(x = "Comparison",
+       color = "Direction",
+       y = "Log10(distance)", 
+       title = "Location compared to transcription start site")
+```
+<br><br>
+
+#### Transcript types
+```{r Transcript types, fig.width = 6, fig.height = 6, out.width = "80%"}
+transcripttypes_counts <- combined_DMRs %>% 
+  distinct(seg_id, comparison, transcripttypes) %>% 
+  mutate(transcripttypes_splitted =  str_split(transcripttypes, ";")) %>%
+  unnest(transcripttypes_splitted) %>% 
+  count(transcripttypes_splitted, sort = TRUE)
+
+transcripttypes_counts <- transcripttypes_counts %>% 
+  mutate(fraction = n/sum(transcripttypes_counts$n))
+
+transcripttypes_counts %>% 
+  s_table()
+
+sum_top_5 <- transcripttypes_counts %>% 
+  slice_max(fraction, n = 5) %>% 
+  reframe(sum(fraction)) %>% pull
+
+transcripttypes_counts %>%
+  ggplot(aes(x = transcripttypes_splitted, y = n, fill = transcripttypes_splitted)) + 
+  geom_bar(stat = "identity", position = "dodge") + 
+  theme(axis.text.x = element_text(angle = 45,
+                                   margin = margin(4, 0, 0, 0),
+                                   hjust = 1),
+        plot.margin = unit(c(1, .2, .2, 1.5), "cm"))
+```
+The sum of fraction of the five most common transcripts is `r sum_top_5`. 
+<br><br>
+
+#### Sum stats for beta-value differences
+```{r}
+beta_values_tidy <- readRDS("results/processed/beta_values_combat_tidy_2024_06_27.rds") %>%
+  dplyr::select(probe_ID, origin, beta_value)
+
+beta_value_sum_stats <- beta_values_tidy %>% 
+  group_by(probe_ID, origin) %>% 
+  reframe(mean_beta_value = mean(beta_value),
+          sd_beta_value = sd(beta_value)) %>% 
+  pivot_wider(names_from = origin, 
+              values_from = c(mean_beta_value, sd_beta_value))
+
+gencode_anno_v2 <- read_tsv("~/R/projects/array_annotation/data/epic.2.0/zhou_annotation/EPICv2.hg38.manifest.gencode.v41.tsv.gz") %>%
+  filter(probeID %in% beta_value_sum_stats$probe_ID)
+
+beta_value_sum_stats <- left_join(
+  beta_value_sum_stats, 
+  gencode_anno_v2, 
+  by = c("probe_ID" = "probeID"))
+
+beta_value_sum_stats <- beta_value_sum_stats %>% 
+  dplyr::select(probe_ID, starts_with("CpG"), everything())
+
+write_tsv(beta_value_sum_stats, "results/processed/beta_value_sum_stats.tsv", 
+          col_names = TRUE)
+```
+<br><br>
+
+
+### Over representation analysis 
+```{r}
+plot_gene_counts <- function(GO_tib, selected_comparison, ont) {
+  GO_tib <- GO_tib %>% 
+    filter(comparison == selected_comparison) %>% 
+    filter(ONTOLOGY == ont)
+  GO_tib$geneID_splitted <- fct_infreq(GO_tib$geneID_splitted)
+  
+  GO_tib %>% 
+    ggplot(aes(x = geneID_splitted)) +
+    geom_bar(stat = "count", fill = "white", color = "black") +
+    theme(axis.text.x = element_text(angle = 45,
+                                     margin = margin(4, 0, 0, 0),
+                                     hjust = 1,
+                                     face = "italic"), 
+          plot.margin = unit(c(0.2, 0.2, 0.2, 0.2), "cm")) + 
+    labs(x = "",
+         y = "Count among terms",
+         title = selected_comparison)
+}
+```
+
+Analysis is conducted using the `clusterProfiler` package based on the enrichGO function. See [chapter 6.3](https://yulab-smu.top/biomedical-knowledge-mining-book/clusterprofiler-go.html#clusterprofiler-go-ora) for details.
+```{r}
+GO_enrichment <- function(nested_DMR) {
+  
+  joined <- nested_DMR %>% 
+    unnest(probes) %>% 
+    ungroup() %>%
+    left_join(., gencode_anno_v2_ensembl, by = c("probe_id" = "probeid")) %>% 
+    na.omit() 
+  
+  gene_list <- setNames(joined$seg_est, joined$gene_symbol)
+  
+  gencode_anno_v2_ensembl <- gencode_anno_v2_ensembl %>% 
+    na.omit()
+  
+  GO_results <- enrichGO(gene = names(gene_list),
+                         OrgDb = "org.Hs.eg.db",
+                         keyType = "SYMBOL",
+                         ont = "ALL",
+                         pvalueCutoff = 0.05,
+                         pAdjustMethod = "BH",
+                         universe = gencode_anno_v2_ensembl$gene_symbol)
+}
+
+GO_LV_RV <- GO_enrichment(DMR_LV_RV_nested)
+GO_LV_RV_tib <- as_tibble(GO_LV_RV) 
+
+GO_LV_S <- GO_enrichment(DMR_LV_S_nested)
+GO_LV_S_tib <- as_tibble(GO_LV_S)
+
+GO_RV_S <- GO_enrichment(DMR_RV_S_nested)
+GO_RV_S_tib <- as_tibble(GO_RV_S)
+```
+<br><br>
+
+#### Filtration of terms with multiple hits from the same DMR
+Issue: Some DMRs may be linked to more than one gene that is involved in the same term. Therefore, such terms may be significant even though only one DMR is significant.
+```{r Filtration of terms with multiple hits from the same DMR, fig.width = 10, fig.height = 6, out.width = "100%"}
+combined_GO_tib <- bind_rows(
+  GO_LV_RV_tib %>% mutate(comparison = "LV_RV"),
+  GO_LV_S_tib %>% mutate(comparison = "LV_S"),
+  GO_RV_S_tib %>% mutate(comparison = "RV_S"))
+
+add_gene_names <- function(GO_tib) {
+  GO_tib %>%
+    mutate(geneID_splitted = str_split(geneID, "/")) %>%
+    unnest(geneID_splitted) 
+}
+
+combined_GO_tib <- add_gene_names(combined_GO_tib)
+
+df1 <- combined_GO_tib %>% 
+  dplyr::select(ID, geneID_splitted)
+
+df2 <- combined_DMRs %>% 
+  filter(str_detect(genesuniq, ";")) %>%
+  dplyr::select(seg_id:seg_end, genesuniq_splitted) %>% 
+  distinct()
+
+df3 <- left_join(df1, df2, by = c("geneID_splitted" = "genesuniq_splitted"),
+                 relationship = "many-to-many") %>% 
+  na.omit() %>% 
+  distinct()
+
+counts_genes_per_segment_and_term <- df3 %>% 
+  count(ID, seg_id, sort = TRUE)
+
+terms_for_removal <- counts_genes_per_segment_and_term %>% 
+            filter(n > 1)
+
+semi_join(df3, 
+          terms_for_removal, 
+          by = c("ID", "seg_id")) %>% 
+  s_table()
+
+rm(df1, df2, df3)
+```
+The table above shows terms with multiple gene hits based on the same DMR. The highlighted term(s) are removed in subsequent analyses. <br><br>
+
+
+#### Number of significant terms
+```{r}
+combined_GO_tib <- combined_GO_tib %>%
+  filter(!ID %in% terms_for_removal$ID) 
+
+t1 <- expand_grid(comparison = unique(combined_GO_tib$comparison), 
+                  ONTOLOGY = unique(combined_GO_tib$ONTOLOGY))
+
+count <- combined_GO_tib %>% 
+  distinct(comparison, ID, ONTOLOGY) %>% 
+  count(comparison, ONTOLOGY)
+
+left_join(t1, count) %>% 
+  mutate(n = if_else(is.na(n), 0, n)) %>% 
+  s_table()
+```
+<br>
+
+#### Summary stats of objects
+##### Values from output
+```{r }
+combined_GO_tib %>% 
+  filter(ONTOLOGY == 'BP') %>%
+  dplyr::select(comparison, everything()) %>% 
+  arrange(ID) %>%
+  dplyr::slice(1) %>% 
+  s_table()
+```
+
+Notice: <br>
+
+-   First number in Gene Ratio is identical to `Count` - number of genes in input.
+-   Second number in Gene Ratio is identical for each comparison.
+-   First number in BgRatio is identical to number of genes in term
+-   Second number in BgRatio **is not** identical to number of genes in input. However, the number is identical among all rows in output and the number is identical to `length(GO_LV_RV@universe)` corresponding to the input variable for the background. The discordance may be due to absence of genes in the database compare with the input - not all genes are *recognised*.
+
+##### richFactor
+*For ORA results, clusterProfiler provides geneRatio (ratio of input genes that are annotated in a term) and BgRatio (ratio of all genes that are annotated in this term). However, other concepts are widely used to help in interpreting enrichment results, such as the rich factor and fold enrichment. A rich factor is defined as the ratio of input genes (e.g., DEGs) that are annotated in a term to all genes that are annotated in this term. The fold enrichment is defined as the ratio of the frequency of input genes annotated in a term to the frequency of all genes annotated to that term, and it is easy to calculate by dividing geneRatio by BgRatio. Here, as an example, we used the mutate verb to create a new column of richFactor based on information available in the clusterProfiler output.*
+
+```{r}
+GO_LV_RV <- mutate(GO_LV_RV, richFactor = Count / as.numeric(sub("/\\d+", "", BgRatio)))
+GO_LV_S <- mutate(GO_LV_S, richFactor = Count / as.numeric(sub("/\\d+", "", BgRatio)))
+GO_RV_S <- mutate(GO_RV_S, richFactor = Count / as.numeric(sub("/\\d+", "", BgRatio)))
+```
+
+See example below for calculation:
+```{r}
+combined_GO_tib %>% 
+  mutate(extracted_from_BG = as.numeric(sub("/\\d+", "", BgRatio)),
+         rich_factor = Count/extracted_from_BG) %>% 
+  dplyr::select(Count, extracted_from_BG, rich_factor, BgRatio) %>% 
+  dplyr::slice(1,4,9) %>% 
+  s_table()
+```
+<br><br>
+
+#### Involved genes
+```{r}
+# str(GO_LV_RV)
+test_term <- data.frame(genes = GO_LV_RV@geneSets$'GO:0060923')
+```
+Each term are constituted by a set of genes associated with that term. For instance, the `GO:0060923` term (`cardiac muscle cell fate commitment`) includes `r nrow(test_term)` genes as shown below and in accordance with the first number in the `BgRatio` column.
+
+```{r}
+test_term %>% 
+  s_table()
+```
+
+```{r}
+scroll_table <- function (dataframe) {
+    kableExtra::scroll_box(kableExtra::kable_styling(knitr::kable(dataframe), 
+        "striped", full_width = FALSE, font_size = 14), width = "1200px", 
+        height = "400px")
+}
+
+plot_rich_factor <- function(GO, ont) {
+  GO %>% 
+    filter(ONTOLOGY == ont) %>% 
+    ggplot(., showCategory = 10,
+           aes(richFactor, fct_reorder(Description, richFactor))) +
+    geom_segment(aes(xend=0, yend = Description)) +
+    geom_point(aes(color = p.adjust, size = Count)) +
+    theme(legend.justification = "left") +
+    scale_color_gradient(high = "#FCBBA1", low = "#A50F15",
+                         guide=guide_colorbar(reverse=TRUE, order=1), 
+                         limits = c(0.001, 0.05)) +
+    scale_size_continuous(limits = size_limits, 
+                          breaks = size_breaks) +
+    labs(x = "Rich factor",
+         y = "", 
+         title = ont, 
+         color = "Adjusted \np-value")
+}
+```
+
+```{r}
+# rm(gencode_anno_v2_ensembl)
+```
+<br>
+
+
+#### Biological Process
+```{r Biological Process, fig.width = 10, fig.height = 5, out.width = "100%"}
+combined_GO_tib %>% 
+  filter(ONTOLOGY == "BP") %>% 
+  arrange(comparison) %>% 
+  dplyr::select(comparison, ID:BgRatio, geneID_splitted) %>% 
+  scroll_table
+
+size_breaks <- c(2, 5, 10, 20)
+size_limits <- c(min(size_breaks), max (size_breaks))
+
+plot_rich_factor(GO_LV_RV, "BP") + ggtitle("LV-RV") +
+  plot_rich_factor(GO_LV_S, "BP") + ggtitle("LV-S") + 
+  plot_rich_factor(GO_RV_S, "BP") + ggtitle("RV-S") +
+  plot_layout(ncol = 3, guides = "collect") + 
+  plot_annotation(title = "Biological Process")
+
+plot_gene_counts(combined_GO_tib, "LV_RV", "BP") +
+  plot_gene_counts(combined_GO_tib, "LV_S", "BP") +
+  plot_gene_counts(combined_GO_tib, "RV_S", "BP") + 
+  plot_layout(ncol = 3, guides = "collect") + 
+  plot_annotation(title = "Biological Process")
+
+top10_genes <- combined_GO_tib %>% 
+  filter(comparison == "LV_RV") %>% 
+  filter(ONTOLOGY  == "BP") %>% 
+  count(geneID_splitted, sort = TRUE) %>% 
+  filter(n >= 10) %>% 
+  pull(geneID_splitted)
+
+plot_rich_factor(GO_LV_RV, "BP") + ggtitle("LV-RV") +
+  combined_GO_tib %>% 
+  filter(geneID_splitted %in% top10_genes) %>% 
+  plot_gene_counts(., "LV_RV", "BP") + 
+  labs(y = bquote("Count among terms (" ~n>=10~")"),
+       title = "LV-RV") +
+  plot_layout(widths = c(1, 2)) & selected_theme
+```
+<br><br>
+
+```{r Biological Process 12_5, fig.width = 12, fig.height = 5, out.width = "100%"}
+plot_rich_factor(GO_LV_RV, "BP") + ggtitle("LV-RV") +
+  combined_GO_tib %>% 
+  filter(geneID_splitted %in% top10_genes) %>% 
+  plot_gene_counts(., "LV_RV", "BP") + 
+  labs(y = bquote("Count among terms (" ~n>=10~")"),
+       title = "LV-RV") +
+  plot_layout(widths = c(1, 2)) & selected_theme
+```
+
+```{r eval = FALSE}
+combined_GO_tib %>%
+  filter(ONTOLOGY == "BP") %>% 
+  arrange(p.adjust) %>% 
+  write_csv(., here(DMR_tables, "BP_significant.csv"))
+```
+<br><br>
+
+#### Molecular Function
+```{r Molecular Function, fig.width = 10, fig.height = 6, out.width = "100%"}
+combined_GO_tib %>% 
+  filter(ONTOLOGY == "MF") %>% 
+  arrange(comparison) %>% 
+  dplyr::select(comparison, ID:BgRatio, geneID_splitted) %>% 
+  scroll_table
+
+size_breaks <- c(2, 5, 10, 20)
+size_limits <- c(min(size_breaks), max (size_breaks))
+
+plot_rich_factor(GO_LV_RV, "MF") + ggtitle("LV-RV") +
+  plot_rich_factor(GO_LV_S, "MF") + ggtitle("LV-S") + 
+  plot_rich_factor(GO_RV_S, "MF") + ggtitle("RV-S") +
+  plot_layout(ncol = 3, guides = "collect") + 
+  plot_annotation(title = "Molecular function")
+
+plot_gene_counts(combined_GO_tib, "LV_RV", "MF") +
+  plot_gene_counts(combined_GO_tib, "LV_S", "MF") +
+  plot_gene_counts(combined_GO_tib, "RV_S", "MF") + 
+  plot_layout(ncol = 3, guides = "collect") + 
+  plot_annotation(title = "Molecular function")
+```
+<br><br>
+
+```{r eval = FALSE}
+combined_GO_tib %>%
+  filter(ONTOLOGY == "MF") %>% 
+  arrange(p.adjust) %>% 
+  write_csv(., here(DMR_tables, "MF_significant.csv"))
+```
+
+#### Cellular Component
+```{r Cellular Component, fig.width = 10, fig.height = 6, out.width = "100%", eval = FALSE}
+combined_GO_tib %>% 
+  filter(ONTOLOGY == "CC") %>% 
+  arrange(comparison) %>% 
+  dplyr::select(comparison, ID:BgRatio, geneID_splitted) %>% 
+  scroll_table
+
+size_breaks <- c(2, 5, 10, 20)
+size_limits <- c(min(size_breaks), max (size_breaks))
+
+plot_rich_factor(GO_LV_RV, "CC") + ggtitle("LV-RV") +
+  plot_rich_factor(GO_LV_S, "CC") + ggtitle("LV-S") + 
+  plot_rich_factor(GO_RV_S, "CC") + ggtitle("RV-S") +
+  plot_layout(ncol = 3, guides = "collect") + 
+  plot_annotation(title = "Cellular Component")
+
+plot_gene_counts(combined_GO_tib, "LV_RV", "CC") +
+  plot_gene_counts(combined_GO_tib, "LV_S", "CC") +
+  plot_gene_counts(combined_GO_tib, "RV_S", "CC") + 
+  plot_layout(ncol = 3, guides = "collect") + 
+  plot_annotation(title = "Cellular Component")
+```
+<br><br>
+
+### Correlation with phenotypic measures
+```{r , fig.width = 10, fig.height = 10, out.width = "100%"}
+correlation_with_pvalue <- function(x, y) {
+  test <- cor.test(x, y, method = "pearson")
+  return(data.frame(correlation = test$estimate, p_value = test$p.value))
+}
+```
+
+#### Comparison of weight and CT measures
+```{r Comparisn of weight and CT measures, fig.width = 10, fig.height = 5, out.width = "100%"}
+df1 <- sample_sheet %>% 
+  distinct(id, lvs, rv, heart_weight)
+
+p1 <- df1 %>% 
+  ggplot(aes(x = lvs, y = heart_weight, color = id)) +
+  geom_point(size = 2.5)
+
+p2 <- df1 %>% 
+  ggplot(aes(x = rv, y = heart_weight, color = id)) +
+  geom_point(size = 2.5)
+
+p1 + p2 + plot_layout(ncol = 2, guides = "collect") & scale_color_manual(values = selected_colors$id)
+
+t1 <- data.frame(lvs_hw = correlation_with_pvalue(df1$lvs, df1$heart_weight),
+                 rv_hw = correlation_with_pvalue(df1$rv, df1$heart_weight))
+
+t1 <- bind_rows(
+  correlation_with_pvalue(df1$lvs, df1$heart_weight) %>% 
+    mutate(comparison = "lvs_hw"),
+  correlation_with_pvalue(df1$rv, df1$heart_weight) %>% 
+    mutate(comparison = "rv_hw")) %>% 
+  tibble() %>% 
+  mutate(p_value = sprintf("%.2e", p_value))
+
+t1 %>% 
+  s_table()
+```
+Notice: <br> 
+
+  * Left ventricle circumferential area has previously been shown to be positively correlated with heart weight (doi: 10.1016/j.jofri.2013.05.002)
+
+```{r Comparisn of weight and CT measures 2, fig.width = 6, fig.height = 6, out.width = "60%"}
+df1 %>% 
+  ggplot(aes(x = lvs, y = heart_weight)) +
+  geom_point(size = 2.5) + 
+  geom_smooth(method = "lm", formula = y ~ x, se = TRUE) +
+  labs(y = "Heart weight (g)",
+       x = expression("Volume of left ventricle and septum ("*cm^3 *")")
+       ) +
+  selected_theme +
+  theme(plot.margin = unit(c(0.2,0.5,0.2,0.2), unit = "cm"))
+lm(lvs ~ heart_weight, data = df1) %>% summary
+```
+<br><br>
+
+#### Left ventricle volume
+```{r Left ventricle volume, fig.width = 10, fig.height = 8, out.width = "100%"}
+selected_regions <- combined_DMR_information %>%
+  filter(seg_id %in% c(98142, 98148)) %>% 
+  mutate(region = paste0(seg_chrm, ":", 
+                         format(seg_start, big.mark=","), "-",
+                         format(seg_end, big.mark=","))) %>% 
+  dplyr::select(seg_id, probe_id, region)
+
+df1 <- selected_regions %>% 
+  left_join(beta_val_differences, by = c("probe_id" = "probe_ID"),
+            relationship = "many-to-many") %>% 
+  dplyr::select(-c(S,LV,RV)) %>% 
+  pivot_longer(cols = c("LV_RV", "LV_S", "RV_S"), 
+               names_to = "comparison", values_to = "difference")
+
+df2 <- df1 %>% 
+  group_by(comparison, seg_id, region, id) %>% 
+  reframe(median_difference = median(difference)) %>% 
+  left_join(sample_sheet %>%
+              dplyr::select(id, lvs, rv, heart_weight, hw_perc_of_bw, cause_of_death:lvs_rv_ratio) %>%
+              distinct()) %>% 
+  filter(!is.na(lvs_rv_ratio))
+
+df2 %>% 
+  mutate(comparison = str_replace_all(
+    comparison, c("LV_S" = "LV-S", "LV_RV" = "LV-RV", "RV_S" = "RV-S"))) %>% 
+  ggplot(aes(x = median_difference, 
+             y = lvs, 
+             color = id)) +
+  geom_point() +
+  geom_smooth(method = "lm", se = TRUE, color = "black")  + 
+  scale_color_manual(values = selected_colors$id) +
+  facet_grid(region ~ comparison) +
+    theme(
+          strip.background = element_rect(fill = "white", color = "black"),
+          axis.text.x = element_text(size = 12),
+          axis.text.y = element_text(size = 12),
+          axis.title.x = element_text(size = 14),
+          axis.title.y = element_text(size = 14),
+          strip.text = element_text(size = 12),
+          legend.text = element_text(size = 12),
+          legend.title = element_text(size = 14)) + 
+  labs(x = expression(paste("Median ", beta, "-value difference per individual")), 
+       y = bquote("Left ventricle volume ("*cm^3*")"),
+       title = bquote("Differentially methylated regions at" ~ italic("PANCR-PITX2") ~ "locus"),
+       color = "ID") 
+
+df2 %>% 
+  group_by(region, comparison) %>%
+  nest() %>%
+  mutate(
+    model = map(data, ~ lm(lvs ~ median_difference, data = .x)),
+    tidied = map(model, broom::tidy)) %>% 
+  unnest(tidied) %>% 
+  dplyr::select(-c(data, model)) %>% 
+  mutate(p.value = sprintf("%.2e", p.value)) %>% 
+  s_table()
+
+df2 %>% 
+  group_by(region, comparison) %>%
+  nest() %>%
+  mutate(
+    model = map(data, ~ lm(lvs ~ median_difference, data = .x)),
+    tidied = map(model, broom::tidy),
+    glanced = map(model, broom::glance),
+  ) %>%
+  unnest(tidied) %>%
+  dplyr::select(-c(data, model)) %>% 
+  unnest(glanced, names_sep = "_") %>% 
+  dplyr::select(-c(glanced_sigma:glanced_nobs)) %>% 
+  mutate(p.value = sprintf("%.2e", p.value)) %>% 
+  s_table()
+```
+For comparison, the bonf corrected threshold is 0.05/6 (`r 0.05/6`). 
+<br><br>
+
+#### LV correlation with DNAm
+```{r LV correlation with DNAm, fig.width = 10, fig.height = 4, out.width = "100%"}
+df3 <- df2 %>% 
+  filter(comparison %in% c("LV_S", "LV_RV")) %>%
+  filter(!(comparison == "LV_RV" & seg_id == 98148)) %>%
+  mutate(comparison = str_replace_all(
+    comparison, c("LV_S" = "LV-S", "LV_RV" = "LV-RV", "RV_S" = "RV-S"))) 
+
+df3 %>% 
+  ggplot(aes(x = median_difference, 
+             y = lvs, 
+             color = id)) +
+  geom_point(size = 2) +
+  scale_color_manual(values = selected_colors$id) +
+  facet_wrap(~region + comparison, ncol = 3) +
+  theme(
+    strip.background = element_rect(fill = "white", color = "black"),
+    axis.text.x = element_text(size = 12),
+    axis.text.y = element_text(size = 12),
+    axis.title.x = element_text(size = 14),
+    axis.title.y = element_text(size = 14),
+    strip.text = element_text(size = 12),
+    legend.text = element_text(size = 12),
+    legend.title = element_text(size = 14)) + 
+  labs(x = expression(paste("Median ", beta, "-value difference per individual")), 
+       y = bquote("Left ventricle volume ("*cm^3*")"),
+       title = bquote("Differentially methylated regions at" ~ italic("PANCR") ~ "and" ~ italic("PITX2")),
+       color = "ID") 
+
+df3 %>% 
+  group_by(region, comparison) %>% 
+  reframe(p_val = cor.test(median_difference, lvs, method = "pearson")$p.value,
+          est = cor.test(median_difference, lvs, method = "pearson")$estimate) %>% 
+  mutate(est_squared = est^2) %>% 
+  s_table()
+```
+<br><br>
+
+#### LV (BSA corrected) correlation with DNAm
+```{r LV (BSA corrected) correlation with DNAm, fig.width = 10, fig.height = 4,  out.width = "100%"}
+df3 <- df3 %>% 
+  mutate(body_surface_area = 0.007184*body_weight^0.425*body_height^0.725,
+               lvs_bsa = lvs/body_surface_area) 
+
+p1 <- df3 %>%  
+  ggplot(aes(x = median_difference, 
+             y = lvs_bsa, 
+             color = id)) +
+  geom_point(size = 2) +
+  scale_color_manual(values = selected_colors$id) +
+  facet_wrap(~region + comparison, ncol = 3) +
+  theme(
+    strip.background = element_rect(fill = "white", color = "black"),
+    axis.text.x = element_text(size = 12),
+    axis.text.y = element_text(size = 12),
+    axis.title.x = element_text(size = 14),
+    axis.title.y = element_text(size = 14),
+    strip.text = element_text(size = 12),
+    legend.text = element_text(size = 12),
+    legend.title = element_text(size = 14)) + 
+  labs(x = expression(paste("Median ", beta, "-value difference per individual")), 
+       y = bquote("LV volume/BSA ("*ml/m^2*")"),
+       title = bquote("Differentially methylated regions at" ~ italic("PANCR") ~ "and" ~ italic("PITX2")),
+       color = "ID") 
+p1 
+
+t1 <- df3 %>% 
+  group_by(region, comparison) %>% 
+  reframe(p_val = cor.test(median_difference, lvs_bsa, method = "pearson")$p.value,
+          est = cor.test(median_difference, lvs_bsa, method = "pearson")$estimate) %>% 
+  mutate(est_squared = est^2) 
+
+t1 %>% 
+  s_table()
+
+labels <- t1 %>% 
+  mutate(x_pos = 0.05, y_pos = 175)
+
+labels$label_name <- paste0(
+  "R² = ", round(labels$est_squared, digits = 2), "\n",
+  "p = ", round(labels$p_val, digits = 3)
+)
+
+p1 + geom_smooth(method = "lm", se = FALSE,
+                 # linetype = "dashed",
+                 color = "black") + 
+  geom_text(data = labels,
+            aes(x = x_pos, y = y_pos, label = label_name),
+            inherit.aes = FALSE, 
+            hjust = 0)
+```
+Correction with Dubois and Dubois 1916 for body surface area. Cor.test is used with "pearson" as input.
+
+------------------------------------------------------------------------
+
+```{r computetime, echo=FALSE}
+time <- lubridate::date()
+```
+
+Report was knitted `r time` <br>
+
+```{r}
+sessionInfo()
+```
+
+```{r rendering while keeping objects in global environment, echo = FALSE, eval=FALSE}
+rmarkdown::render("scripts/characterisation_of_DMRs.Rmd", clean = TRUE, output_dir = "reports/")
+```
+
+<br>
+   

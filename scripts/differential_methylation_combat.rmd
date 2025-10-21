@@ -1,0 +1,622 @@
+```{r, echo = FALSE}
+title <- "Differential methylation"
+```
+
+---
+title: `r title`
+author: "Steffan Noe Niikanoff Christiansen"
+output: 
+  html_document:
+      number_sections: TRUE
+---
+
+#### Global options and paths
+
+```{r message=FALSE}
+packages <- c("tidyverse", "patchwork", "kableExtra", "sesame", "noecodedup", 
+              "here", "kableExtra", "sva")
+
+invisible(lapply(packages, require, character.only = TRUE)) 
+theme_set(theme_bw() + 
+            theme(plot.title = element_text(hjust = 0.5),
+                  axis.text = element_text(size = 10)))
+```
+
+```{r setup, message=FALSE, echo = FALSE}
+# paths
+root_path <- here()
+DMR_path <- here("results", "processed", "DMRs_sesame")
+DML_path <- here("results", "processed", "DMLs_sesame")
+fig_path <- here("results", "images", title, "/")
+
+# global options
+require("knitr")
+opts_knit$set(root.dir = root_path)
+opts_chunk$set(warning = TRUE,
+               message = FALSE,
+               dpi = 300,
+               dev = "jpeg",
+               fig.width = 6,
+               fig.height = 6,
+               fig.align="center", 
+               fig.path = fig_path,
+               echo = FALSE,
+               warning = FALSE)
+
+options(scipen = 100, digits = 3, bitmapType="cairo") # fixes grid.Call warning 
+time <- lubridate::date()
+```
+
+Rendering of the report was started `r time` <br> following packages were loaded: `r packages` <br><br>
+
+#### Loading data
+```{r loading data}
+beta_values <- readRDS("results/processed/beta_values_combat_2024_06_27.rds")
+sample_sheet <- readRDS("data/sample_sheet_2024_10_23.rds")
+selected_colors <- readRDS("data/selected_colors_2023_12_19.rds")
+sample_sheet <- sample_sheet %>% 
+  mutate(id = factor(id))
+```
+
+There are `r nrow(beta_values)` rows and `r ncol(beta_values)` columns of the `beta_values_combat_2024_06_27.rds` object. <br>
+
+### Combined DML and DMR using SeSAMe
+```{r Combined DML and DMR}
+# beta_values <- beta_values[sample(nrow(beta_values),
+#                                   1000,
+#                                   replace = FALSE), ]
+beta_values_unmasked_positions <- checkLevels(beta_values, sample_sheet$origin)
+beta_values <- beta_values[beta_values_unmasked_positions, ]
+```
+
+Identical names of `sample_sheet$id_pos` and `colnames(beta_values)`: `r identical(sample_sheet$id_pos, colnames(beta_values))`.
+
+```{r DMRs, message = TRUE, eval = FALSE}
+calculate_differential_methylation <- function(ref_tissue, contrast_tissue) {
+  sample_sheet$origin <- relevel(factor(sample_sheet$origin), ref_tissue)
+  suffix <- "_ori_id_combat_sentrix_pos_"
+  # DML
+  DML <- DML(beta_values, ~ origin + id,
+             meta = sample_sheet)
+  DML_extracted <- summaryExtractTest(DML)
+
+  saveRDS(DML_extracted, file.path(DML_path,
+                                   paste0("DML", suffix, ref_tissue, "_", contrast_tissue, "_2024_06_27.rds")))
+  rm(DML_extracted)
+  gc()
+
+  # DMR
+  DMR <- DMR(
+    beta_values,
+    DML,
+    contrast_tissue,
+    platform = "EPICv2")
+  saveRDS(DMR, file.path(DMR_path,
+                         paste0("DMR", suffix, ref_tissue, "_", contrast_tissue, "_2024_06_27.rds")))
+  
+  
+}
+
+calculate_differential_methylation("LV", "originRV")
+calculate_differential_methylation("LV", "originS")
+# calculate_differential_methylation("S", "originRV")
+# calculate_differential_methylation("S", "originLV")
+calculate_differential_methylation("RV", "originS")
+# calculate_differential_methylation("RV", "originLV")
+```
+
+```{r lm() approach for test}
+beta_values_test <- beta_values["cg21634357_BC11", ]
+beta_values_test <- cbind(sample_sheet[, c("origin", "id")], beta_values_test)
+mm <- model.matrix(~ origin + id, 
+                   data = sample_sheet[, c("origin", "id")])
+```
+
+```{r}
+rm(beta_values, beta_values_unmasked_positions)
+```
+
+<br>
+-   The three tissues were modelled with the other two as contrasts. Therefore, 6 files could be while the output of half of them were expected to be duplicated. 
+
+### DMLs
+Following objects were loaded:
+```{r}
+fn <- list.files(DML_path, pattern = "2024_06_27")
+fn
+```
+
+```{r}
+DML_LV_RV <- readRDS(here(DML_path, fn[1]))
+DML_LV_S <- readRDS(here(DML_path, fn[2])) 
+DML_RV_S <- readRDS(here(DML_path, fn[3])) 
+```
+
+<br>
+
+#### Effect sizes and estimates
+The [user guide](https://www.bioconductor.org/packages/devel/bioc/vignettes/sesame/inst/doc/modeling.html) states following concerning theses variables: <br>
+
+-   *`Est_` : The slope estimate (aka the β coefficient, not to be confused with the DNA methylation β-value though) for continuous variable. DNA methylation difference of the current level with respect to the reference level for nominal contrast variables. Each suffix is concatenated from the contrast variable name (e.g., tissue, sex) and the level name if the contrast variable is discrete (e.g, Cecum, Esophagus, Fat). For example, Est_tissueFat should be interpreted as the estimated methylation level difference of Fat compared to the reference tissue (which is Colon, as set above). If reference is not set, the first level in the alphabetic order is used as the reference level. There is a special column named Est\_`(Intercept)`. It corresponds to the base-level methylation of the reference (in this case a Female Colon sample).*
+-   *`Eff_` : The effect size of each normial contrast variable. This is equivalent to the maximum slope subtracted by the minimum level including the reference level (0).*
+
+##### Example CpG (`cg21634357_BC11`)
+```{r Effect sizes and estimates, fig.width = 10, fig.height = 6, out.width = "100%"}
+test_cpg <- "cg21634357_BC11"
+
+DML_LV_RV %>% 
+  filter(Probe_ID == test_cpg) %>% 
+  dplyr::select(Probe_ID, contains("origin")) %>% 
+  s_table()
+```
+Notice that `Eff_origin`and `Est_originS` are identical.
+
+##### Example of single CpG coefficients from DML object (`cg21634357_BC11`)
+```{r Example of single CpG coefficients, fig.width = 10, fig.height = 6, out.width = "100%"}
+beta_values_tidy <- readRDS("results/processed/beta_values_combat_tidy_2024_06_27.rds") %>%
+  select(-c(id_pos, sample_name, date_for_run, sex, age))
+beta_values_tidy <- beta_values_tidy %>% 
+  filter(probe_ID == test_cpg)
+
+p1 <- beta_values_tidy %>% 
+  ggplot(., aes(x = id, y = beta_value, color = origin)) +
+  geom_point() +
+  scale_color_manual(values = selected_colors$origin) +
+  theme(axis.text.x = element_text(angle = 45,
+                                   margin = margin(4, 0, 0, 0),
+                                   hjust = 0.95))
+
+p2 <- beta_values_tidy %>% 
+  ggplot(., aes(x = sentrix_position, y = beta_value, color = id)) +
+  geom_point() +
+  theme(axis.text.x = element_text(angle = 45,
+                                   margin = margin(4, 0, 0, 0),
+                                   hjust = 0.95)) +
+  labs(y = "")
+
+p1 + p2 + plot_layout()
+```
+<br>
+
+```{r}
+DML_LV_RV %>% 
+  filter(Probe_ID == test_cpg) %>% 
+  select(Probe_ID, Est_X.Intercept., contains(c("origin", "id"))) %>% 
+  select(-contains("Pval")) %>% 
+  t() %>% 
+  s_table()
+```
+<br><br>
+
+##### Example of single CpG coefficients from lm() object (`cg21634357_BC11`)
+The base R lm() approach results in following coefficients using a model matrix with the same inputs as in the DML() approach. 
+```{r Example of single CpG coefficients from lm object, fig.width = 10, fig.height = 6, out.width = "100%"}
+lm_model <- lm(beta_values_test ~ mm, data = beta_values_test)
+
+model_comparison <- data.frame(lm_model$coefficients) %>% 
+  rownames_to_column() %>% 
+  mutate(rowname = str_remove(rowname , "mm")) %>% 
+  tibble()
+
+colnames(model_comparison)[2] <- "beta (combat) ~ origin + id"
+model_comparison %>% 
+  s_table()
+```
+Notice: 
+  
+  * Intercept are identical between the two objects
+  * Estimates of origin, id, and sentrix position are identical between objects.
+
+<br><br>
+
+##### Comparing single CpG coefficients with beta-values
+```{r Comparing single CpG coefficients with beta-values, fig.width = 10, fig.height = 6, out.width = "100%"}
+subtract_column <- function(df, column_to_subtract) {
+  df %>%
+    mutate(across(-column_to_subtract, ~. - !!sym(column_to_subtract)))
+}
+
+# beta ~ origin
+mm_origin <- mm[, c("originS", "originRV")]
+lm_model <- lm(beta_values_test ~ mm_origin, data = beta_values_test)
+
+beta_values_tidy %>%
+  group_by(origin) %>%
+  reframe(mean = mean(beta_value)) %>%
+  pivot_wider(names_from = origin, values_from = mean) %>%
+  subtract_column(., "LV") %>% 
+  s_table()
+```
+For a simple model, beta ~ origin + id, the average of the beta values obtained from the `beta_values_tidy` object is identical to the slope estimates from the model. Not possible to calculate the exact value for the full model (not shown)
+<br><br>
+
+
+#### P-value distributions of DMLs
+```{r P-value distributions origin, fig.height=5, fig.width=10}
+x_breaks <- seq(0, 1, 0.1)
+y_limits <- c(0, 25000)
+
+plot_p_value <- function(model, p_value_column){
+  model %>%
+    ggplot(aes(x = get(p_value_column))) +
+    geom_histogram(color = "black",
+                   fill = "white",
+                   binwidth = 0.01,
+                   boundary = 0) +
+    theme_bw() +
+    theme(plot.title = element_text(hjust = 0.5)) + 
+    scale_x_continuous(breaks = x_breaks) + 
+    scale_y_continuous(limits = y_limits) + 
+    labs(y = "n positions",
+         x = "p-value")
+}
+
+p1 <- plot_p_value(DML_LV_RV, "Pval_originRV") + ggtitle("LV vs RV")
+p2 <- plot_p_value(DML_LV_S, "Pval_originS") + ggtitle("LV vs S")
+p3 <- plot_p_value(DML_RV_S, "Pval_originS") + ggtitle("RV vs S")
+p1 + p2 + p3 + plot_annotation(title = "p-values (pair-wise)")
+
+rm(list = ls(pattern = "p[0-9]"))
+```
+<br><br>
+
+### DMRs
+Following objects were loaded:
+```{r}
+DMR_LV_RV <- readRDS(here(DMR_path, "DMR_ori_id_combat_sentrix_pos_LV_originRV_2024_06_27.rds")) %>% s_names
+DMR_LV_S <- readRDS(here(DMR_path, "DMR_ori_id_combat_sentrix_pos_LV_originS_2024_06_27.rds")) %>% s_names
+DMR_RV_S <- readRDS(here(DMR_path, "DMR_ori_id_combat_sentrix_pos_RV_originS_2024_06_27.rds")) %>% s_names
+```
+<br>
+
+```{r DMR, fig.width = 10, fig.height = 6, out.width = "100%"}
+p_threshold <- 0.05
+beta_threshold <- 0.00
+n_cpgs_threshold <- 0
+
+gencode_anno_v2 <- read_tsv("~/R/projects/array_annotation/data/epic.2.0/zhou_annotation/EPICv2.hg38.manifest.gencode.v41.tsv.gz") %>%
+  s_names %>% 
+  select(cpg_chrm:cpg_end, probeid)
+
+add_counts <- function(DMR) {
+  DMR <- left_join(DMR, gencode_anno_v2, by = c("probe_id" = "probeid"))
+  
+  counts <- DMR %>%
+    group_by(seg_id) %>% 
+    select(seg_id, cpg_chrm, cpg_beg, cpg_end) %>% 
+    distinct() %>% 
+    count(name = "n_pos_in_DMR")
+  
+  DMR <- left_join(DMR, counts, by = "seg_id")
+}
+
+DMR_LV_RV <- add_counts(DMR_LV_RV)
+DMR_LV_S <- add_counts(DMR_LV_S)
+DMR_RV_S <- add_counts(DMR_RV_S)
+
+return_filtered_DMRs <- function(DMR) {
+  DMRs_seg_ids <- DMR %>% 
+    filter(seg_pval_adj <= p_threshold) %>% 
+    filter(n_pos_in_DMR >= n_cpgs_threshold) %>% 
+    filter(abs(seg_est) >= beta_threshold) %>% 
+    distinct(seg_id) %>% 
+    pull()
+  DMR %>% 
+    filter(seg_id %in% DMRs_seg_ids) 
+}
+
+distinct_DMR <- function(DMR){
+  DMR %>% 
+    select(seg_id:seg_pval_adj, n_pos_in_DMR) %>% 
+    distinct()
+}  
+
+count_DMRs <- function(DMR) {
+  return_filtered_DMRs(DMR) %>% 
+    distinct_DMR() %>% 
+    count(n_pos_in_DMR, name = "occurences") 
+}
+```
+
+```{r}
+rm(gencode_anno_v2)
+```
+
+```{r DMRs per comparison, fig.width = 6, fig.height = 6, out.width = "60%"}
+nDMR_df <- bind_rows(
+  count_DMRs(DMR_LV_RV) %>% mutate(comparison = "DMR_LV_RV"),
+  count_DMRs(DMR_LV_S) %>% mutate(comparison = "DMR_LV_S"),
+  count_DMRs(DMR_RV_S) %>% mutate(comparison = "DMR_RV_S")
+)
+
+nDMR_df %>% 
+  ggplot(aes(x = n_pos_in_DMR, y = occurences, color = comparison)) +
+  # ggplot(aes(x = n_cpgs_in_DMR, y = occurences, color = comparison)) +
+  geom_point() 
+```
+
+```{r}
+p_threshold <- 0.05
+beta_threshold <- 0.00
+# n_cpgs_threshold <- 5
+# n_cpgs_threshold <- 0
+n_cpgs_threshold <- 5
+```
+
+Following DMRs are returned with following threshold values: <br>
+
+-   adjusted p-value of segment: `r p_threshold`
+-   beta-val difference: `r beta_threshold`
+-   n CpGs in DMR: `r n_cpgs_threshold` <br>
+
+##### LV RV
+```{r}
+DMR_LV_RV_subset <- return_filtered_DMRs(DMR_LV_RV)
+```
+
+`r distinct_DMR(DMR_LV_RV_subset) %>% nrow()` DMRs were detected with the thresholds shown above.
+
+```{r}
+DMR_LV_RV_subset %>%
+  distinct_DMR() %>% 
+  scroll_table()
+```
+The `seg_est` ranges from `r min(DMR_LV_RV_subset$seg_est)` to `r max(DMR_LV_RV_subset$seg_est)`. 
+
+<br>
+
+##### LV S
+```{r}
+DMR_LV_S_subset <- return_filtered_DMRs(DMR_LV_S)
+```
+
+`r distinct_DMR(DMR_LV_S_subset) %>% nrow()` DMRs were detected with the thresholds shown above.
+
+```{r}
+DMR_LV_S_subset %>% 
+  distinct_DMR() %>% 
+  scroll_table()
+```
+The `seg_est` ranges from `r min(DMR_LV_S_subset$seg_est)` to `r max(DMR_LV_S_subset$seg_est)`. 
+<br>
+
+##### RV S
+```{r}
+DMR_RV_S_subset <- return_filtered_DMRs(DMR_RV_S)
+```
+
+`r distinct_DMR(DMR_RV_S_subset) %>% nrow()` DMRs were detected with the thresholds shown above.
+
+```{r}
+DMR_RV_S_subset %>% 
+  distinct_DMR() %>% 
+  scroll_table()
+```
+The `seg_est` ranges from `r min(DMR_RV_S_subset$seg_est)` to `r max(DMR_RV_S_subset$seg_est)`. 
+<br><br>
+
+```{r}
+rm(list = c("DMR_LV_RV", "DMR_LV_S", "DMR_RV_S"))
+```
+
+
+```{r}
+nest_DMRs <- function(DMR) {
+  temp <- DMR %>%
+    group_by(seg_id) %>%
+    select(starts_with("seg"), probe_id) %>%
+    nest(probes = probe_id)
+  return(temp)
+}
+
+DMR_LV_RV_nested <- nest_DMRs(DMR_LV_RV_subset)
+DMR_LV_S_nested <- nest_DMRs(DMR_LV_S_subset)
+DMR_RV_S_nested <- nest_DMRs(DMR_RV_S_subset)
+```
+
+#### Differences among each region
+```{r}
+beta_values_tidy <- readRDS("results/processed/beta_values_combat_tidy_2024_06_27.rds")
+beta_values_tidy_probes <- unique(beta_values_tidy$probe_ID)
+```
+`r length(beta_values_tidy_probes)` probes are available from `beta_values_combat_tidy_2024_06_27.rds`. The object is filtered to contain only information about probes from significant regions.
+
+```{r}
+DMR_probes <- c(DMR_LV_RV_subset$probe_id,
+                DMR_LV_S_subset$probe_id,
+                DMR_RV_S_subset$probe_id)
+```
+The DMRs include `r length(DMR_probes)` probes (`r length(unique(DMR_probes))` unique) among the three comparisons.
+
+```{r}
+beta_values_tidy <- beta_values_tidy %>% 
+  dplyr::select(-c(date_for_run, sentrix_position, sentrix_id)) %>% 
+  filter(probe_ID %in% DMR_probes)
+
+gencode_anno_v2 <- read_tsv("~/R/projects/array_annotation/data/epic.2.0/zhou_annotation/EPICv2.hg38.manifest.gencode.v41.tsv.gz") %>%
+  s_names
+```
+
+```{r}
+beta_values_tidy <- left_join(
+  beta_values_tidy,
+  gencode_anno_v2 %>%
+    dplyr::select(-c(probe_strand, genenames, transcriptids, transcripttypes, cpg_end)),
+  by = c("probe_ID"= "probeid"))
+```
+
+```{r}
+rm(gencode_anno_v2)
+```
+
+```{r}
+beta_val_differences <- beta_values_tidy %>%
+  pivot_wider(id_cols = -c(id_pos, sample_name),
+              names_from = origin, values_from = beta_value) %>%
+  mutate(LV_RV = LV-RV,
+         LV_S = LV-S,
+         RV_S = RV-S)
+
+seg_id_98140_probes <- DMR_LV_RV_nested %>% 
+  filter(seg_id == 98140) %>% 
+  unnest(probes) %>% 
+  pull()
+
+LV_RV_diff_98140 <- beta_val_differences %>% 
+  filter(probe_ID %in% seg_id_98140_probes) %>% 
+  reframe(mean_LV_RV = mean(LV_RV))
+
+LV_RV_seg_est_98140 <- DMR_LV_RV_nested %>% 
+  filter(seg_id == 98140) %>% 
+  pull(seg_est)
+
+```
+The difference between all `r length(seg_id_98140_probes)` probes for LV and RV is `r LV_RV_diff_98140` (RV lower than LV). In comparison, the `seg_est` from LV-RV (`seg_id 98140`) is `r LV_RV_seg_est_98140`. <br>
+
+#### Median differences per individual among each region
+```{r}
+median_diff_per_id <- function(nested_DMR, comparison) {
+  df <- tibble()
+  
+  for (i in 1:nrow(nested_DMR)) {
+    unnested <- nested_DMR[i,] %>% 
+      unnest(cols = probes)
+    
+    temp_df <- beta_val_differences %>% 
+      filter(probe_ID %in% unnested$probe_id) %>% 
+      group_by(id) %>% 
+      reframe(median_difference = median(get(paste(comparison))))
+    
+    temp_df$seg_id = nested_DMR[i,] %>% pull(seg_id)
+    temp_df$seg_est = nested_DMR[i,] %>% pull(seg_est)
+    temp_df$seg_pval = nested_DMR[i,] %>% pull(seg_pval)
+    temp_df$comparison = comparison
+    
+    df <- bind_rows(df, temp_df)
+    
+  }
+  return(df)
+}
+
+DMR_LV_RV_median_dif <- median_diff_per_id(DMR_LV_RV_nested, "LV_RV")
+DMR_LV_S_median_dif <- median_diff_per_id(DMR_LV_S_nested, "LV_S")
+DMR_RV_S_median_dif <- median_diff_per_id(DMR_RV_S_nested, "RV_S")
+```
+
+```{r Median difference among individuals per region, fig.width = 10, fig.height = 12, out.width = "100%"}
+plot_median_differences <- function(DMR_median_dif, threshold) {
+  
+  
+  DMR_median_dif <- DMR_median_dif %>% 
+    mutate(outlier_threshold = 
+             if_else(abs(median_difference) >= threshold, id, NA))
+  
+  DMR_median_dif %>%
+    group_by(seg_id) %>%
+    ggplot(aes(x = factor(seg_id), y = median_difference)) +
+    geom_jitter(aes(color = outlier_threshold), width = 0.05, size = 1) +
+    geom_boxplot(outlier.shape = NA) +
+    scale_color_manual(values = selected_colors$id, na.value = "gray") +  # Custom colors for groups
+    scale_y_continuous(limits = y_limits,
+                       breaks = y_breaks) +
+    geom_hline(yintercept = 0, "grey", linetype = "dashed") +
+    theme(axis.text.x = element_text(angle=45,
+                                     margin = margin(4,0,0,0),
+                                     hjust = 1)) +
+    labs(y = expression(paste(beta, "-value difference")))
+}
+y_limits <- c(-.35, 0.35)
+y_breaks <- seq(y_limits[1], y_limits[2], by = 0.1)
+p1 <- plot_median_differences(DMR_LV_RV_median_dif, 0.15) + ggtitle("LV - RV")
+p2 <- plot_median_differences(DMR_LV_S_median_dif,  0.15) + ggtitle("LV - S")
+p3 <- plot_median_differences(DMR_RV_S_median_dif,  0.15) + ggtitle("RV - S")
+
+p1 + p2 + p3 + plot_layout(ncol = 1, guides = "collect")
+```
+<br> 
+
+```{r}
+combined <- bind_rows(
+  DMR_LV_RV_median_dif, 
+  DMR_LV_S_median_dif,
+  DMR_RV_S_median_dif)
+
+range_per_region <- combined %>%
+  group_by(seg_id, comparison) %>% 
+  reframe(min = min(median_difference),
+          max = max(median_difference), 
+          range = max-min) %>% 
+  arrange(-range)
+
+range_per_region %>% 
+  scroll_table
+```
+<br>
+
+#### Highest median differences per individual per region
+```{r Highest median differences per region, fig.width = 10, fig.height = 6, out.width = "100%"}
+top_regions <- function(DMR_median_dif, n){
+  DMR_median_dif %>% 
+    slice_max(abs(median_difference), n = n) %>% 
+    arrange(desc(abs(median_difference))) %>% 
+    s_table()
+}
+```
+
+```{r }
+top_regions(DMR_LV_RV_median_dif, 10)
+```
+<br>
+
+```{r }
+top_regions(DMR_LV_S_median_dif, 10)
+```
+<br>
+
+```{r }
+top_regions(DMR_RV_S_median_dif, 10)
+```
+<br><br>
+
+
+
+
+### Saving objects
+Nested DMRs objects were saved 2024.06.27. Following threshold values were used: <br>
+
+-   adjusted p-value of segment: `r p_threshold`
+-   beta-val difference: `r beta_threshold`
+-   n CpGs in DMR: `r n_cpgs_threshold` <br>
+
+```{r Saving objects, fig.width = 10, fig.height = 6, out.width = "100%", eval = TRUE}
+save_objects <- function(DMR_object) {
+  fn <- paste0(DMR_object, "_",
+               n_cpgs_threshold, "_cpgs_",
+               "2024_06_27.rds")
+  saveRDS(get(paste(DMR_object)),
+          here(DMR_path, fn))
+}
+save_objects("DMR_LV_RV_nested")
+save_objects("DMR_LV_S_nested")
+save_objects("DMR_RV_S_nested")
+```
+<br><br>
+
+
+------------------------------------------------------------------------
+
+```{r computetime, echo=FALSE}
+time <- lubridate::date()
+```
+
+Report was knitted `r time` <br>
+
+```{r}
+sessionInfo()
+```
+
+```{r rendering while keeping objects in global environment, echo = FALSE, eval=FALSE}
+rmarkdown::render("scripts/differential_methylation_combat.rmd", clean = TRUE, output_dir = "reports/")
+```
+
+<br>
