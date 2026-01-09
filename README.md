@@ -10,4 +10,4 @@ This repository contain code for the following manuscript: [INSERT TITLE] (INSER
   * visualisation_DMRs: Visualisation of location of differentially methylated regions in comparison to previously identified differentially accessible regions and transcribed regulatory elements
 
 ## Code
-The `s_names`, `scroll_table`, and `s_table` helper functions are available from https://github.com/SteffanChristiansen/noecodedup/R/
+The `s_names`, `scroll_table`, and `s_table` helper functions are available from https://github.com/SteffanChristiansen/noecodedup/
