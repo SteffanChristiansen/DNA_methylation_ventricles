@@ -35,6 +35,8 @@ anno_path <- here(project_path, "array_annotation", "data", "epic.2.0", "zhou_an
 gencode_path <- here(project_path, "gtex", "data", "gtex.v9")
 fig_path <- here("results", "images", title, "/")
 hocker_path <- here(project_path, "regional_annotation", "data", "hocker_science_adv_2021")
+deviatiiarov_path <- here(project_path, "public_transcriptomes", "data", "deviatiiarov_2023_nat_cv_research")
+# dir(deviatiiarov_path)
 
 # global options
 require("knitr")
@@ -94,11 +96,10 @@ gencode_v41 <- gencode_v41 %>%
 
 ### Transcribed regulatory elements
 ```{r , fig.width = 10, fig.height = 6, out.width = "100%"}
-data_dir <- here(project_path, "public_transcriptomes", "data", "deviatiiarov_2023_nat_cv_research")
-dir(data_dir)
+
 
 library(ggrepel) 
-source_data_fig3 <- readxl::read_xlsx(here(data_dir, "44161_2022_182_MOESM7_ESM.xlsx"), 
+source_data_fig3 <- readxl::read_xlsx(here(deviatiiarov_path, "44161_2022_182_MOESM7_ESM.xlsx"), 
                                       skip = 2,
                                       sheet = "DE healthy right vs left") %>% 
   s_names
@@ -117,14 +118,14 @@ In accordance with fig 3e <br><br>
 ```{r Transcribed regulatory elements, fig.width = 10, fig.height = 6, out.width = "100%"}
 # source_data_fig1_explanations
 source_data_fig1_explanations <- readxl::read_xlsx(
-  here(data_dir, "44161_2022_182_MOESM6_ESM.xlsx"),
+  here(deviatiiarov_path, "44161_2022_182_MOESM6_ESM.xlsx"),
   skip = 0,
   n_max = 54
 ) %>%
   s_names
 
 source_data_fig1 <- readxl::read_xlsx(
-  here(data_dir, "44161_2022_182_MOESM6_ESM.xlsx"),
+  here(deviatiiarov_path, "44161_2022_182_MOESM6_ESM.xlsx"),
   skip = 56,
 ) %>%
   s_names %>% 
@@ -186,7 +187,7 @@ p1
 
 #### Adding A vs V information
 ```{r Adding A vs V information, fig.width = 10, fig.height = 6, out.width = "100%"}
-source_data_fig3_a_v <- readxl::read_xlsx(here(data_dir, "44161_2022_182_MOESM7_ESM.xlsx"), 
+source_data_fig3_a_v <- readxl::read_xlsx(here(deviatiiarov_path, "44161_2022_182_MOESM7_ESM.xlsx"), 
                                           skip = 2,
                                           sheet = "DE healthy atrium vs ventricle") %>% 
   s_names
@@ -198,16 +199,6 @@ source_data_fig3_a_v %>%
 ```
 <br><br>
 
-### Previous tresholds for DMRs
-Paper | DMR Cutoff
--------------------|----------------------------------------------------------------
-https://www.nature.com/articles/s41398-019-0550-2 | *"Here we defined a DMR as a region containing ≥ 5 correlated probes (peak probe p < 0.01 and correlation among probes ≥ 0.30), and a significant DMR was defined as a region with q < 0.05 after correcting for total number of 6858 regions."*
-https://www.mdpi.com/2073-4409/8/8/921/htm | *"DMRcate was applied to identify differentially methylated regions (DMRs), defined as a 300 nucleotides sequence with at least seven CpG sites presenting methylation changes in the same direction [32]. "*"
-https://journals.plos.org/plosone/article?id=10.1371/journal.pone.0209656 | *"Statistical significance was defined as DMRs that had a Stouffer transformed Benjamini-Hochberg (BH) adjusted p-value below 0.05."*
-https://www.nature.com/articles/s41467-019-11004-3 | *"Differentially methylated regions were identified using DMRcate (v1.14.0)61 setting a threshold of absolute change in beta value in >0.1 and of Stouffer’s value in <0.05."*
-https://www.tandfonline.com/doi/full/10.1080/15592294.2019.1588682 | *"We searched for differentially methylated regions (DMRs), or groups of at least four CpGs within proximal genomic locations using DMRCate."* **Notice that Stouffer values are up to more than 0.80. Authors explain transformation as follows:** *Stouffer is the Stouffer transformation of the group of FDRs for individual CGs at the DMR*.  
-https://www.nature.com/articles/s41467-019-11058-3   | *"We performed regional DNAm analyses using DMRcate53 to identify DMRs associated with each trait. We defined a significant DMR as a DNAm region ≥5 CpGs and evaluated statistical significance using a Stouffer FDR-adjusted P <0.05"*.
-<br>
 
 ### Visualisation of selected regions
 ```{r }
@@ -296,6 +287,8 @@ plot_region_with_mean <- function(DMR) {
     scale_y_continuous(breaks = y_breaks) + 
     labs(y = expression(paste(beta, "-value")),
          x = "CpG (arranged by position)",
+         # color = "Anatomical \nregion",
+         color = "",
          title = paste0("Seg ID:", DMR$seg_id,
                         ", Gene: ", beta_values_roi$genesuniq, "\n\n",
                         region))
@@ -376,10 +369,22 @@ patch & scale_y_continuous(limits = c(0, 0.4)) & selected_theme
 ```
 <br><br>
 
-```{r PANCR region beta 7 3, fig.width = 7, fig.height = 3}
-patch & scale_y_continuous(limits = c(0, 0.35)) & selected_theme
+```{r PANCR region beta 7 4, fig.width = 7, fig.height = 4}
+patch & scale_y_continuous(limits = c(0, 0.35)) & selected_theme + theme(plot.margin = unit(c(0.2, 0.2, 0.2, 0.5), "cm"))
 ```
+
+```{r PANCR region beta 9 5, fig.width = 9, fig.height = 5}
+patch & scale_y_continuous(limits = c(0, 0.35)) & selected_theme + theme(plot.margin = unit(c(0.2, 0.2, 0.2, 0.5), "cm"))
+```
+
+```{r PANCR region beta 10 6, fig.width = 10, fig.height = 6}
+patch & scale_y_continuous(limits = c(0, 0.35)) & selected_theme + theme(plot.margin = unit(c(0.2, 0.2, 0.2, 0.5), "cm"))
+```
+
+
 <br><br>
+
+
 
 #### Overview of region
 ```{r}
@@ -457,7 +462,7 @@ p2 <- df %>%
   scale_fill_manual(values = c("#A6761D", "#666666")) +
   theme(legend.justification = "left",
         axis.text.y = element_blank()) + 
-  labs(fill = "Differentially methylated regions")
+  labs(fill = "Differentially \nmethylated regions")
 
 # Adding data from Hocker et al 2021
 s10_RA_LA <- readxl::read_xlsx(here(hocker_path, "abf1444_table_s10.xlsx"), skip = 1,
@@ -500,20 +505,21 @@ p_region <-
     panel.grid.minor.y = element_blank(), 
     legend.justification = "left",
     plot.margin = unit(rep(0.10, 4), "cm")
-  ) & 
-  geom_vline(xintercept = c(labels$cluster_start, labels$cluster_end),
-               color = "black", linetype = "dashed", linewidth = .5, alpha = 0.75)
+  ) 
+# & 
+#   geom_vline(xintercept = c(labels$cluster_start, labels$cluster_end),
+#                color = "black", linetype = "dashed", linewidth = .5, alpha = 0.75)
 ```
 
 ```{r PANCR region 8 6, fig.width = 8, fig.height = 6}
 p_region
 ```
 
-```{r PANCR region 8 4, fig.width = 8, fig.height = 4}
+```{r PANCR region 8 4, fig.width = 8, fig.height = 4, eval = FALSE}
 p_region
 ```
 
-```{r PANCR region 8 5, fig.width = 8, fig.height = 5}
+```{r PANCR region 8 5, fig.width = 8, fig.height = 5, eval = FALSE}
 p_region
 ```
 
@@ -540,6 +546,56 @@ distance_DMRs <- DMR_LV_S_nested %>%
 Distance between DMRs: `r distance_DMRs`
 <br><br>
 
+
+
+```{r }
+p_region <- 
+  p_PANCR_PITX2 +
+  p2 + 
+  # p3 +
+  plot_layout(ncol = 1, axes = "collect", heights = c(6, 2)) &
+  scale_x_continuous(
+    labels = comma, 
+    # breaks = c(110600000, 110620000,  110630000,110640000, 
+    #            PANCR_DMRs$seg_start, PANCR_DMRs$seg_end),
+    limits = c(min(gencode_v41_PANCR_PITX2$start)-1000,
+               max(gencode_v41_PANCR_PITX2$end)+1000)) &
+  theme(
+    axis.ticks.y = element_blank(),      
+    # axis.text.y = element_blank(),
+    panel.grid.major.y = element_blank(),  
+    panel.grid.minor.y = element_blank(), 
+    legend.justification = "left",
+    plot.margin = unit(rep(0.10, 4), "cm")
+  ) 
+# & 
+#   geom_vline(xintercept = c(labels$cluster_start, labels$cluster_end),
+#                color = "black", linetype = "dashed", linewidth = .5, alpha = 0.75)
+```
+
+```{r PANCR region 8 6 (simple), fig.width = 8, fig.height = 6}
+p_region & 
+  theme(
+    axis.text.x = element_text(size = 15),
+    legend.title = element_text(size = 15),
+    legend.text = element_text(size = 13))
+```
+
+```{r PANCR region 8 4 (simple), fig.width = 8, fig.height = 4}
+p_region & 
+  theme(
+    axis.text.x = element_text(size = 15),
+    legend.title = element_text(size = 15),
+    legend.text = element_text(size = 13))
+```
+
+```{r PANCR region 8 5 (simple), fig.width = 8, fig.height = 5}
+p_region & 
+  theme(
+    axis.text.x = element_text(size = 15),
+    legend.title = element_text(size = 15),
+    legend.text = element_text(size = 13))
+```
 
 
 

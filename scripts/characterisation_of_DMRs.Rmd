@@ -20,10 +20,12 @@ theme_set(theme_bw() +
 ```{r setup, message=FALSE, echo = FALSE}
 # paths
 root_path <- here()
+project_path <- str_remove(root_path, "/[A-z]+$")
 processed_path <- here("results", "processed")
 DMR_path <- here("results", "processed", "DMRs_sesame")
 fig_path <- here("results", "images", title, "/")
 DMR_tables <- here("results", "tables", "DMR")
+anno_path <- here(project_path, "array_annotation", "data", "epic.2.0", "zhou_annotation")
 
 # global options
 require("knitr")
@@ -80,7 +82,11 @@ extract_regional_information <- function(DMR_fn) {
   DMR <- left_join(DMR, counts, by = "seg_id")
 }
 
-gencode_anno_v2 <- read_tsv("~/R/projects/array_annotation/data/epic.2.0/zhou_annotation/EPICv2.hg38.manifest.gencode.v41.tsv.gz") %>%
+# gencode_anno_v2 <- read_tsv("~/R/projects/array_annotation/data/epic.2.0/zhou_annotation/EPICv2.hg38.manifest.gencode.v41.tsv.gz") %>%
+#   s_names %>% 
+#   dplyr::select(cpg_chrm:cpg_end, probeid)
+
+gencode_anno_v2 <- read_tsv(here(anno_path, "EPICv2.hg38.manifest.gencode.v41.tsv.gz")) %>%
   s_names %>% 
   dplyr::select(cpg_chrm:cpg_end, probeid)
 
@@ -233,7 +239,11 @@ The `median_difference_treshold` is `r median_difference_treshold`. <br>
 ```{r }
 beta_values_tidy_probes <- readRDS("results/processed/beta_values_tidy_probes_2024_06_27.rds")
 
-gencode_anno_v2 <- read_tsv("~/R/projects/array_annotation/data/epic.2.0/zhou_annotation/EPICv2.hg38.manifest.gencode.v41.tsv.gz") %>%
+# gencode_anno_v2 <- read_tsv("~/R/projects/array_annotation/data/epic.2.0/zhou_annotation/EPICv2.hg38.manifest.gencode.v41.tsv.gz") %>%
+#   s_names %>% 
+#   filter(probeid %in% beta_values_tidy_probes)
+
+gencode_anno_v2 <- read_tsv(here(anno_path, "EPICv2.hg38.manifest.gencode.v41.tsv.gz")) %>%
   s_names %>% 
   filter(probeid %in% beta_values_tidy_probes)
 
@@ -665,8 +675,11 @@ beta_value_sum_stats <- beta_values_tidy %>%
   pivot_wider(names_from = origin, 
               values_from = c(mean_beta_value, sd_beta_value))
 
-gencode_anno_v2 <- read_tsv("~/R/projects/array_annotation/data/epic.2.0/zhou_annotation/EPICv2.hg38.manifest.gencode.v41.tsv.gz") %>%
-  filter(probeID %in% beta_value_sum_stats$probe_ID)
+# gencode_anno_v2 <- read_tsv("~/R/projects/array_annotation/data/epic.2.0/zhou_annotation/EPICv2.hg38.manifest.gencode.v41.tsv.gz") %>%
+#   filter(probeID %in% beta_value_sum_stats$probe_ID)
+
+gencode_anno_v2 <- read_tsv(here(anno_path, "EPICv2.hg38.manifest.gencode.v41.tsv.gz")) %>%
+  filter(probeID %in% beta_values_tidy_probes)
 
 beta_value_sum_stats <- left_join(
   beta_value_sum_stats, 
@@ -1225,6 +1238,45 @@ p1 + geom_smooth(method = "lm", se = FALSE,
 ```
 Correction with Dubois and Dubois 1916 for body surface area. Cor.test is used with "pearson" as input.
 
+```{r LV (BSA corrected) correlation with DNAm  (long format), fig.width = 5, fig.height = 10,  out.width = "60%"}
+p1 <- df3 %>%  
+  ggplot(aes(x = median_difference, 
+             y = lvs_bsa, 
+             color = id)) +
+  geom_point(size = 2) +
+  scale_color_manual(values = selected_colors$id) +
+  facet_wrap(~region + comparison, ncol = 1) +
+  theme(
+    strip.background = element_rect(fill = "white", color = "black"),
+    axis.text.x = element_text(size = 12),
+    axis.text.y = element_text(size = 12),
+    axis.title.x = element_text(size = 14),
+    axis.title.y = element_text(size = 14),
+    strip.text = element_text(size = 12),
+    legend.text = element_text(size = 12),
+    legend.title = element_text(size = 14)) + 
+  labs(x = expression(paste("Median ", beta, "-value difference per individual")), 
+       y = bquote("LV volume/BSA ("*ml/m^2*")"),
+       title = bquote("Differentially methylated regions at" ~ italic("PANCR") ~ "and" ~ italic("PITX2")),
+       color = "ID") 
+p1 
+
+t1 <- df3 %>% 
+  group_by(region, comparison) %>% 
+  reframe(p_val = cor.test(median_difference, lvs_bsa, method = "pearson")$p.value,
+          est = cor.test(median_difference, lvs_bsa, method = "pearson")$estimate) %>% 
+  mutate(est_squared = est^2) 
+
+p1 + geom_smooth(method = "lm", se = FALSE,
+                 # linetype = "dashed",
+                 color = "black") + 
+  geom_text(data = labels,
+            aes(x = x_pos, y = y_pos, label = label_name),
+            inherit.aes = FALSE, 
+            hjust = 0)
+```
+
+
 ------------------------------------------------------------------------
 
 ```{r computetime, echo=FALSE}
@@ -1238,7 +1290,7 @@ sessionInfo()
 ```
 
 ```{r rendering while keeping objects in global environment, echo = FALSE, eval=FALSE}
-rmarkdown::render("scripts/characterisation_of_DMRs.Rmd", clean = TRUE, output_dir = "reports/")
+rmarkdown::render("scripts/characterisation_of_DMRs.Rmd", clean = TRUE, output_dir = "reports/", envir = globalenv())
 ```
 
 <br>

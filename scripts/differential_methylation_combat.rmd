@@ -25,9 +25,11 @@ theme_set(theme_bw() +
 ```{r setup, message=FALSE, echo = FALSE}
 # paths
 root_path <- here()
+project_path <- str_remove(root_path, "/[A-z]+$")
 DMR_path <- here("results", "processed", "DMRs_sesame")
 DML_path <- here("results", "processed", "DMLs_sesame")
 fig_path <- here("results", "images", title, "/")
+anno_path <- here(project_path, "array_annotation", "data", "epic.2.0", "zhou_annotation")
 
 # global options
 require("knitr")
@@ -154,7 +156,7 @@ Notice that `Eff_origin`and `Est_originS` are identical.
 ##### Example of single CpG coefficients from DML object (`cg21634357_BC11`)
 ```{r Example of single CpG coefficients, fig.width = 10, fig.height = 6, out.width = "100%"}
 beta_values_tidy <- readRDS("results/processed/beta_values_combat_tidy_2024_06_27.rds") %>%
-  select(-c(id_pos, sample_name, date_for_run, sex, age))
+  dplyr::select(-c(id_pos, sample_name, date_for_run, sex, age))
 beta_values_tidy <- beta_values_tidy %>% 
   filter(probe_ID == test_cpg)
 
@@ -274,9 +276,12 @@ p_threshold <- 0.05
 beta_threshold <- 0.00
 n_cpgs_threshold <- 0
 
-gencode_anno_v2 <- read_tsv("~/R/projects/array_annotation/data/epic.2.0/zhou_annotation/EPICv2.hg38.manifest.gencode.v41.tsv.gz") %>%
+gencode_anno_v2 <- read_tsv(here(anno_path, "EPICv2.hg38.manifest.gencode.v41.tsv.gz")) %>%
   s_names %>% 
   select(cpg_chrm:cpg_end, probeid)
+# gencode_anno_v2 <- read_tsv("~/R/projects/array_annotation/data/epic.2.0/zhou_annotation/EPICv2.hg38.manifest.gencode.v41.tsv.gz") %>%
+#   s_names %>% 
+#   select(cpg_chrm:cpg_end, probeid)
 
 add_counts <- function(DMR) {
   DMR <- left_join(DMR, gencode_anno_v2, by = c("probe_id" = "probeid"))
@@ -433,8 +438,11 @@ beta_values_tidy <- beta_values_tidy %>%
   dplyr::select(-c(date_for_run, sentrix_position, sentrix_id)) %>% 
   filter(probe_ID %in% DMR_probes)
 
-gencode_anno_v2 <- read_tsv("~/R/projects/array_annotation/data/epic.2.0/zhou_annotation/EPICv2.hg38.manifest.gencode.v41.tsv.gz") %>%
-  s_names
+# gencode_anno_v2 <- read_tsv("~/R/projects/array_annotation/data/epic.2.0/zhou_annotation/EPICv2.hg38.manifest.gencode.v41.tsv.gz") %>%
+#   s_names
+
+gencode_anno_v2 <- read_tsv(here(anno_path, "EPICv2.hg38.manifest.gencode.v41.tsv.gz")) %>%
+  s_names 
 ```
 
 ```{r}
