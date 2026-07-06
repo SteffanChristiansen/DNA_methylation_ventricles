@@ -1277,6 +1277,135 @@ p1 + geom_smooth(method = "lm", se = FALSE,
 ```
 
 
+
+#### Imputation of missing values for CT scanes
+```{r Imputation of missing values for CT scanes, fig.width = 10, fig.height = 6, out.width = "60%"}
+# weight imputation  ------------------------------------------------------
+
+distinct_lvs_hw <- sample_sheet %>%
+  dplyr::select(id, lvs, heart_weight, body_weight, body_height) %>%
+  distinct() 
+  
+model_lm <- lm(lvs ~ heart_weight, data = distinct_lvs_hw)
+# summary(model_lm)
+
+distinct_lvs_hw <- distinct_lvs_hw %>%
+  mutate(
+    imputation_status = if_else(is.na(lvs), TRUE, FALSE),
+    imputed_lvs = if_else(
+      imputation_status, 
+      predict(model_lm, newdata = pick(heart_weight)),
+      lvs
+    ),
+  ) 
+
+p1 <- distinct_lvs_hw %>%
+  ggplot(aes(x = heart_weight, y = imputed_lvs, shape = imputation_status)) + 
+  geom_point(size = 4)
+
+p1 + geom_smooth(method = "lm", se = FALSE,
+                 linetype = "dashed",
+                 color = "black") 
+
+distinct_lvs_hw  %>% 
+  distinct(id, lvs, imputed_lvs, imputation_status) %>%
+  arrange(id) %>% 
+  s_table()
+```
+<br><br>
+
+
+#### LV (BSA corrected) including imputed values
+```{r LV (BSA corrected) including imputed values,  fig.width = 5, fig.height = 10,  out.width = "100%"}
+
+df2 <- df1 %>% 
+  group_by(comparison, seg_id, region, id) %>% 
+  reframe(median_difference = median(difference)) %>% 
+  left_join(distinct_lvs_hw)
+
+df3 <- df2 %>% 
+  filter(comparison %in% c("LV_S", "LV_RV")) %>%
+  filter(!(comparison == "LV_RV" & seg_id == 98148)) %>%
+  mutate(comparison = str_replace_all(
+    comparison, c("LV_S" = "LV-S", "LV_RV" = "LV-RV", "RV_S" = "RV-S"))) 
+
+df3 <- df3 %>% 
+  mutate(body_surface_area = 0.007184*body_weight^0.425*body_height^0.725,
+         lvs_bsa = lvs/body_surface_area,
+         lvs_imp_bsa = imputed_lvs/body_surface_area) 
+
+p1 <- df3 %>%  
+  ggplot(aes(x = median_difference, 
+             y = lvs_imp_bsa,
+             color = id)) +
+  geom_point(size = 2, aes(shape = imputation_status)) +
+  scale_color_manual(values = selected_colors$id) +
+  facet_wrap(~region + comparison, ncol = 1) +
+  theme(
+    strip.background = element_rect(fill = "white", color = "black"),
+    axis.text.x = element_text(size = 12),
+    axis.text.y = element_text(size = 12),
+    axis.title.x = element_text(size = 14),
+    axis.title.y = element_text(size = 14),
+    strip.text = element_text(size = 12),
+    legend.text = element_text(size = 12),
+    legend.title = element_text(size = 14)) + 
+  labs(x = expression(paste("Median ", beta, "-value difference per individual")), 
+       y = bquote("LV volume/BSA ("*ml/m^2*")"),
+       title = bquote("Differentially methylated regions at" ~ italic("PANCR") ~ "and" ~ italic("PITX2")),
+       color = "ID") 
+
+t2 <- df3 %>% 
+  group_by(region, comparison) %>% 
+  reframe(p_val = cor.test(median_difference, lvs_bsa, method = "pearson")$p.value,
+          est = cor.test(median_difference, lvs_bsa, method = "pearson")$estimate,
+          p_val_imp = cor.test(median_difference, lvs_imp_bsa, method = "pearson")$p.value,
+          est_imp = cor.test(median_difference, lvs_imp_bsa, method = "pearson")$estimate) %>% 
+  mutate(est_squared = est^2,
+         est_imp_squared = est_imp^2) 
+
+t2 %>% 
+  s_table()
+
+labels <- t2 %>% 
+  mutate(x_pos = 0.05, y_pos = 175)
+
+# imputed
+# labels$label_name <- paste0(
+#   "R² = ", round(labels$est_imp_squared, digits = 2), "\n",
+#   "p = ", round(labels$p_val_imp, digits = 3)
+# )
+
+labels$label_name <- paste0(
+  "R² = ", round(labels$est_squared, digits = 2), "\n",
+  "p = ", round(labels$p_val, digits = 3)
+)
+
+# imputed
+# p1 + geom_smooth(
+#   method = "lm", se = FALSE, color = "black") + 
+#   geom_text(data = labels,
+#             aes(x = x_pos, y = y_pos, label = label_name),
+#             inherit.aes = FALSE, 
+#             hjust = 0) +
+#   guides(shape = "none")
+
+p1 + geom_smooth(aes(x = median_difference, y = lvs_bsa),  
+  method = "lm", se = FALSE, color = "black") + 
+  geom_text(data = labels,
+            aes(x = x_pos, y = y_pos, label = label_name),
+            inherit.aes = FALSE, 
+            hjust = 0) +
+  guides(shape = "none")
+
+```
+Notice: <br>
+
+  * imputed values are available in table. Labels and regression line correspond to the 12 individuals where there are CT measurements 
+  *
+
+<br><br>
+
 ------------------------------------------------------------------------
 
 ```{r computetime, echo=FALSE}
@@ -1291,6 +1420,7 @@ sessionInfo()
 
 ```{r rendering while keeping objects in global environment, echo = FALSE, eval=FALSE}
 rmarkdown::render("scripts/characterisation_of_DMRs.Rmd", clean = TRUE, output_dir = "reports/", envir = globalenv())
+
 ```
 
 <br>

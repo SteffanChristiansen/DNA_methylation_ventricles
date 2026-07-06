@@ -355,8 +355,13 @@ y <- c(0, 950000)
 plot_bar("num_dt_mk", qcs_tib) + ylab("N. Probes") + ggtitle("Before preproccesing") + 
   plot_bar("num_dt_mk", qcs_after_tib) + ylab("N. Probes") + ggtitle("After preproccesing") +
   plot_layout(ncol = 1, guide = "collect") + plot_annotation(title = "N. Probes w/ Detection Success")  
+
+frac_dt_vec <- qcs_tib %>%
+  na.omit() %>% 
+  select(frac_dt) %>% 
+  pull()
 ```
-<br><br>
+Among the `r length(frac_dt_vec)` samples, the frac_dt ranged from  `r min(frac_dt_vec)` to `r max(frac_dt_vec)` (median: `r median(frac_dt_vec)`)<br><br>
 
 #### Investigaton of position bias
 ```{r Investigaton of position bias}
