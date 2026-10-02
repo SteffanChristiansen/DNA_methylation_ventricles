@@ -1,7 +1,7 @@
 # DNA methylation of the human ventricles
 
 ## Overview
-This repository contain code for the following manuscript published in Cardiovascular Research [10.1093/cvr/cvag202](https://doi.org/10.1093/cvr/cvag202). Original preprint (www.medrxiv.org/content/10.1101/2025.08.26.25334499v2.
+This repository contain code for the following [manuscript]((https://doi.org/10.1093/cvr/cvag202) published in Cardiovascular Research. Original preprint (www.medrxiv.org/content/10.1101/2025.08.26.25334499v2).
 Following scripts were used for the analyses: <br> 
    
   * QC_and_normalisation: Quality control, normalisation, and batch correction. 
