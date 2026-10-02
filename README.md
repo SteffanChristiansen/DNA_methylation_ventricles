@@ -1,8 +1,9 @@
 # DNA methylation of the human ventricles
 
 ## Overview
-This repository contain code for the following preprint: doi: www.medrxiv.org/content/10.1101/2025.08.26.25334499v2. Following scripts were used for the analyses: <br> 
-  
+This repository contain code for the following manuscript published in Cardiovascular Research [10.1093/cvr/cvag202](https://doi.org/10.1093/cvr/cvag202). Original preprint (www.medrxiv.org/content/10.1101/2025.08.26.25334499v2.
+Following scripts were used for the analyses: <br> 
+   
   * QC_and_normalisation: Quality control, normalisation, and batch correction. 
   * exploratory_analysis: Exploratory analysis including principal component analysis, heatmap, density plots and sample-sample correlations. 
   * differential_methylation_combat: Modelling DNA methylation differences among left and right ventricle and septum.
